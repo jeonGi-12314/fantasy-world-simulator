@@ -39,6 +39,44 @@ function fx(obj) { return obj; }
 const EVENT_POOL = [
 
   // ────────────────────────────────────────
+  // REST EVENTS (저체력 캐릭터 전용)
+  // ────────────────────────────────────────
+  {
+    id: 'rest_recover',
+    type: 'rest',
+    weight: 8,
+    conditions: { notDead: true },
+    resolve(char, gs) {
+      const hpGain = randInt(5, 15);
+      const fatigueReduce = randInt(10, 20);
+      const msgs = [
+        `${char.name}이(가) 오늘은 무리하지 않고 충분히 쉬었다. 내일을 위한 힘을 비축했다.`,
+        `${char.name}이(가) 몸 상태를 살피며 하루를 쉬었다. 상처가 조금씩 아물었다.`,
+        `${char.name}이(가) 여관에서 온종일 쉬며 회복에 집중했다.`,
+      ];
+      return {
+        logClass: 'log-system',
+        text: `${pick(msgs)} (HP +${hpGain}, 피로 -${fatigueReduce})`,
+        effects: fx({ hp: hpGain, fatigue: -fatigueReduce }),
+      };
+    },
+  },
+  {
+    id: 'rest_heal_poison',
+    type: 'rest',
+    weight: 12,
+    conditions: { notDead: true, hasStatus: 'poison' },
+    resolve(char, gs) {
+      const hpGain = randInt(3, 8);
+      return {
+        logClass: 'log-status',
+        text: `${char.name}이(가) 중독 증세로 인해 하루를 쉬며 해독에 집중했다. (HP +${hpGain})`,
+        effects: fx({ hp: hpGain, fatigue: -10 }),
+      };
+    },
+  },
+
+  // ────────────────────────────────────────
   // COMBAT EVENTS
   // ────────────────────────────────────────
   {
@@ -1155,13 +1193,15 @@ const INTERACTION_EVENTS = [
   },
   {
     id: 'interact_trade',
-    weight: 6,
+    weight: 2, // 6 → 2, 빈도 대폭 감소
+    // a가 여유 있고 b가 실제로 금화가 부족할 때만 발동
+    condition: (a, b) => a.gold >= 120 && b.gold < 50,
     resolve(a, b, gs) {
-      const goldAmount = randInt(5, 30);
-      const afDelta = randInt(3, 8);
+      const goldAmount = randInt(10, 40);
+      const afDelta = randInt(5, 12);
       return {
         logClass: 'log-economy',
-        text: `${a.name}이(가) ${b.name}에게 ${goldAmount}G를 빌려줬다. 두 사람 사이에 채무 관계가 형성됐다. (호감도 +${afDelta})`,
+        text: `${a.name}이(가) 금화가 부족한 ${b.name}에게 ${goldAmount}G를 빌려줬다. (호감도 +${afDelta})`,
         affectionDelta: afDelta,
         goldTransfer: goldAmount,
       };
@@ -1294,6 +1334,19 @@ function pickEvent(char, gs) {
   });
 
   if (!eligible.length) return EVENT_POOL.find(e => e.id === 'explore_gather');
+
+  // HP 25% 미만이면 위험 이벤트 제외 → 휴식/안전 이벤트만
+  if (char.hp < char.maxHp * 0.25) {
+    const safeEvents = eligible.filter(e => e.type === 'rest' || e.id === 'explore_gather' || e.id === 'explore_gather');
+    if (safeEvents.length > 0) {
+      // 중독 상태면 치유 휴식 우선
+      if (char.statusEffects.includes('poison')) {
+        const healRest = safeEvents.find(e => e.id === 'rest_heal_poison');
+        if (healRest) return healRest;
+      }
+      return safeEvents[Math.floor(Math.random() * safeEvents.length)];
+    }
+  }
 
   // weighted random
   const totalWeight = eligible.reduce((s, e) => s + e.weight, 0);

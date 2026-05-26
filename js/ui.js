@@ -20,6 +20,60 @@ function renderAll() {
   renderHeader(gs);
   renderCharacterList(gs);
   renderActiveTab(gs);
+  renderChoiceQueue(gs);
+}
+
+// ─── 선택지 큐 렌더링 ────────────────────
+function renderChoiceQueue(gs) {
+  const queueEl = document.getElementById('story-choice-queue');
+  if (!queueEl) return;
+  if (!gs.pendingChoices || gs.pendingChoices.length === 0) {
+    queueEl.innerHTML = '';
+    return;
+  }
+  const choice = gs.pendingChoices[0];
+  queueEl.innerHTML = `
+    <div class="choice-pending-banner" onclick="openChoiceModal()">
+      ⚠ <strong>${choice.title || '선택 대기 중'}</strong>
+      <span style="margin-left:6px;font-size:11px;opacity:.8">클릭하여 선택하기 →</span>
+    </div>
+  `;
+}
+
+function openChoiceModal() {
+  const gs = window.GS;
+  if (!gs.pendingChoices || !gs.pendingChoices.length) return;
+  const choice = gs.pendingChoices[0];
+
+  const modal = document.getElementById('story-choice-modal');
+  document.querySelector('#story-choice-modal .modal-header h3').textContent = choice.title || '선택의 기로';
+  document.getElementById('story-choice-content').innerHTML = `<p>${choice.desc || ''}</p>`;
+
+  const btnContainer = document.getElementById('story-choice-buttons');
+  btnContainer.innerHTML = '';
+  (choice.options || []).forEach((opt, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn-choice';
+    btn.innerHTML = `<strong>${opt.label}</strong><br><small>${opt.desc}</small>`;
+    btn.addEventListener('click', () => {
+      resolveChoice(choice, opt.reward, gs);
+      gs.pendingChoices.shift();
+      modal.classList.add('hidden');
+      renderAll();
+      saveGame(gs);
+    });
+    btnContainer.appendChild(btn);
+  });
+
+  modal.classList.remove('hidden');
+}
+
+function resolveChoice(choice, reward, gs) {
+  if (choice.type === 'party_quest') {
+    resolvePartyQuest(choice.partyId, reward, gs);
+  } else if (choice.type === 'guild_quest') {
+    resolveGuildQuest(reward, gs);
+  }
 }
 
 // ─── HEADER ──────────────────────────────

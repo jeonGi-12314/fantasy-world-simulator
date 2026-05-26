@@ -84,6 +84,9 @@ async function nextDay() {
     // 9. Romance & relationship updates
     processRomance(aliveChars, gs, dayLogs);
 
+    // 9b. Guild quest check
+    processGuildQuests(gs, dayLogs);
+
     // 10. Party checks
     processParties(aliveChars, gs, dayLogs);
 
@@ -140,10 +143,14 @@ async function nextDay() {
       setTimeout(() => showNextPromotion(), 500);
     }
 
-    // 18. Ending
+    // 18. Ending — 파티 전멸·마왕 처치만 모달 출력, 나머지는 로그만
     if (ending && !gs.endingsAchieved.includes(ending.id)) {
       gs.endingsAchieved.push(ending.id);
-      setTimeout(() => showEnding(ending), 1000);
+      if (ending.id === 'darkness_consumed' || ending.id === 'hero_return') {
+        setTimeout(() => showEnding(ending), 1000);
+      } else {
+        appendToLog([{ logClass: 'log-world', text: `🏆 ${ending.icon} [${ending.name}] 달성! ${ending.desc}` }]);
+      }
     }
   } catch (err) {
     console.error('[nextDay error]', err);
@@ -158,8 +165,8 @@ async function nextDay() {
 
 // ─── WORLD THREAT ────────────────────────
 function processWorldThreat(gs, dayLogs) {
-  // Natural increase each day
-  const naturalIncrease = gs.settings.developerMode ? 0 : 1;
+  // Natural increase each day — 1000-day baseline: 0.1/day reaches max in ~1000 days
+  const naturalIncrease = gs.settings.developerMode ? 0 : 0.1;
   gs.world.threatLevel = Math.min(100, Math.max(0, gs.world.threatLevel + naturalIncrease));
 
   // Hero actions reduce it (calculated elsewhere via worldThreatDelta)
@@ -194,9 +201,9 @@ function applyEventResult(char, gs, result, dayLogs) {
     if (fx.gold > 0) gs.world.totalGoldCirculated += fx.gold;
   }
 
-  // EXP
+  // EXP — 1000일 기준: 0.2배 적용 (기존 100일 기준 EXP ÷ 5)
   if (fx.exp) {
-    char.exp = char.exp + fx.exp;
+    char.exp = char.exp + fx.exp * 0.2;
   }
 
   // Action counts
@@ -277,9 +284,15 @@ function applyEventResult(char, gs, result, dayLogs) {
 // ─── STATUS PASSIVES ─────────────────────
 function applyStatusPassives(char, gs, dayLogs) {
   if (char.statusEffects.includes('poison')) {
-    const dmg = 5;
+    const dmg = 3; // 5 → 3, 치명도 완화
     char.hp = Math.max(0, char.hp - dmg);
-    dayLogs.push({ logClass: 'log-status', text: `☠ ${char.name}의 중독이 진행됐다. (HP -${dmg})` });
+    // 8% 자연 해독 (성당 방문 없이도 생존 가능)
+    if (Math.random() < 0.08) {
+      char.statusEffects.splice(char.statusEffects.indexOf('poison'), 1);
+      dayLogs.push({ logClass: 'log-status', text: `✨ ${char.name}의 중독이 자연적으로 해독됐다.` });
+    } else {
+      dayLogs.push({ logClass: 'log-status', text: `☠ ${char.name}의 중독이 진행됐다. (HP -${dmg})` });
+    }
   }
   if (char.statusEffects.includes('charmed')) {
     const target = getCharmedTarget(char, gs);
@@ -331,14 +344,14 @@ function processInteractions(aliveChars, gs, dayLogs) {
         if (gs.settings.friendshipMode) return false;
         const rel = getRelationship(a, b.id);
         if (!rel || rel.type !== 'lover') return false;
-        // Check gender settings
         const same = a.gender === b.gender;
         if (same && !gs.settings.allowSameSexCouple) return false;
         if (!same && !gs.settings.allowHeteroCouple) return false;
-        // Check minor restriction
         if (gs.settings.minorRelationRestriction && (a.isMinor || b.isMinor)) return false;
         return true;
       }
+      // condition 함수가 있으면 실행
+      if (ie.condition && !ie.condition(a, b, gs)) return false;
       return true;
     });
 
@@ -385,7 +398,8 @@ function processRomance(aliveChars, gs, dayLogs) {
         if (same && !gs.settings.allowSameSexCouple) continue;
         if (!same && !gs.settings.allowHeteroCouple) continue;
 
-        const loverChance = Math.min(0.6, 0.15 * (gs.settings.storySpeed || 1));
+        // 1000일 기준: 0.03/day → 연인까지 평균 ~33일
+        const loverChance = Math.min(0.3, 0.03 * (gs.settings.storySpeed || 1));
         if (Math.random() < loverChance) {
           rel.type = 'lover';
           const pr = getRelationship(partner, char.id);
@@ -394,12 +408,12 @@ function processRomance(aliveChars, gs, dayLogs) {
         }
       }
 
-      // Lover for days → marriage
+      // Lover for days → marriage — 1000일 기준: 결혼까지 평균 100일
       if (rel.type === 'lover') {
         if (!char.daysAsLovers) char.daysAsLovers = {};
         const key = rel.targetId;
         char.daysAsLovers[key] = (char.daysAsLovers[key] || 0) + 1;
-        const marriageChance = Math.min(0.5, (0.01 + Math.floor(char.daysAsLovers[key] / 2) * 0.01) * (gs.settings.storySpeed || 1));
+        const marriageChance = Math.min(0.25, (0.002 + Math.floor(char.daysAsLovers[key] / 10) * 0.002) * (gs.settings.storySpeed || 1));
 
         if (Math.random() < marriageChance) {
           rel.type = 'spouse';
@@ -502,7 +516,142 @@ function formParty(chars, gs, dayLogs) {
   const party = { id, memberIds: chars.map(c => c.id), sharedInventory: [], formedDay: gs.day };
   gs.parties.push(party);
   for (const c of chars) c.currentPartyId = id;
-  dayLogs.push({ logClass: 'log-party', text: `🤝 ${chars.map(c => c.name).join(', ')}이(가) 파티를 결성했다!` });
+  const names = chars.map(c => c.name).join(', ');
+  dayLogs.push({ logClass: 'log-party', text: `🤝 ${names}이(가) 파티를 결성했다! 첫 퀘스트를 선택하세요.` });
+  // 파티 결성 → 퀘스트 선택 팝업
+  gs.pendingChoices.push({
+    type: 'party_quest',
+    partyId: id,
+    title: `🤝 파티 퀘스트 선택`,
+    desc: `${names}이(가) 파티를 결성했습니다. 첫 번째 퀘스트를 선택하세요.`,
+    options: [
+      { label: '⚔ 토벌 의뢰', desc: '강적 처치. 성공 시 큰 보상, 실패 시 HP 손실.', reward: 'combat' },
+      { label: '🗺 유적 탐험', desc: '고대 유적 탐험. 유물·골드 획득 가능.', reward: 'explore' },
+      { label: '🛡 마을 수호', desc: '마을 방어. 위협도 감소, 안정적인 보상.', reward: 'defend' },
+      { label: '💬 휴식', desc: '당분간 활동 없이 체력 회복에 집중.', reward: 'rest' },
+    ],
+  });
+}
+
+// ─── 파티 퀘스트 결과 처리 ────────────────
+function resolvePartyQuest(partyId, rewardType, gs) {
+  const party = gs.parties.find(p => p.id === partyId);
+  if (!party) return;
+  const members = gs.characters.filter(c => party.memberIds.includes(c.id) && !c.isDead);
+  if (!members.length) return;
+
+  const logs = [];
+  const avgStr = members.reduce((s, c) => s + (c.stats.str || 0), 0) / members.length;
+  const success = Math.random() < (0.4 + avgStr * 0.04);
+
+  switch (rewardType) {
+    case 'combat': {
+      if (success) {
+        const gold = randInt(80, 200) * members.length;
+        const names = members.map(c => c.name).join(', ');
+        members.forEach(c => { c.gold += Math.floor(gold / members.length); c.actionCounts.combat = (c.actionCounts.combat||0)+2; });
+        gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 3);
+        logs.push({ logClass: 'log-party', text: `⚔ 파티 [${names}]이(가) 토벌 의뢰에 성공했다! 금화 ${gold}G를 나눠 가졌다. (위협도 -3)` });
+      } else {
+        members.forEach(c => { c.hp = Math.max(1, c.hp - randInt(10, 25)); });
+        logs.push({ logClass: 'log-party', text: `⚔ 파티가 토벌 의뢰에 실패했다... 모두 부상을 입고 귀환했다.` });
+      }
+      break;
+    }
+    case 'explore': {
+      if (success) {
+        const gold = randInt(60, 150) * members.length;
+        members.forEach(c => { c.gold += Math.floor(gold / members.length); c.exp += 10; });
+        gs.world.baseResources.ancient_artifact = (gs.world.baseResources.ancient_artifact||0) + 1;
+        logs.push({ logClass: 'log-party', text: `🗺 파티가 유적 탐험에 성공! 금화 ${gold}G와 고대 유물을 발견했다.` });
+      } else {
+        members.forEach(c => { c.hp = Math.max(1, c.hp - randInt(5, 15)); c.fatigue = Math.min(100, c.fatigue + 20); });
+        logs.push({ logClass: 'log-party', text: `🗺 파티가 유적 탐험 중 함정에 빠졌다. 간신히 탈출했다. (피로 +20)` });
+      }
+      break;
+    }
+    case 'defend': {
+      const gold = randInt(40, 80) * members.length;
+      members.forEach(c => { c.gold += Math.floor(gold / members.length); });
+      gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 5);
+      logs.push({ logClass: 'log-party', text: `🛡 파티가 마을 수호에 나섰다. 금화 ${gold}G를 받고 위협도가 감소했다. (위협도 -5)` });
+      break;
+    }
+    case 'rest': {
+      members.forEach(c => { c.hp = Math.min(c.maxHp, c.hp + 20); c.fatigue = Math.max(0, c.fatigue - 30); });
+      logs.push({ logClass: 'log-party', text: `💤 파티가 함께 충분히 쉬었다. 모두 체력을 회복했다. (HP +20, 피로 -30)` });
+      break;
+    }
+  }
+  appendToLog(logs);
+}
+
+// ─── 길드 퀘스트 처리 ────────────────────
+function processGuildQuests(gs, dayLogs) {
+  if (!gs.world.buildings?.guild) return;
+  if (gs.pendingChoices.some(c => c.type === 'guild_quest')) return; // 중복 방지
+  // 평균 20일마다 한 번 (5% per day)
+  if (Math.random() > 0.05) return;
+
+  gs.pendingChoices.push({
+    type: 'guild_quest',
+    title: '📋 길드 의뢰판',
+    desc: '길드에 새로운 의뢰가 올라왔습니다. 파티에게 어떤 의뢰를 맡기시겠습니까?',
+    options: [
+      { label: '🐗 몬스터 소탕 (쉬움)', desc: '난이도 낮음. 금화 50~100G, 소재 획득.', reward: 'easy' },
+      { label: '🏯 던전 공략 (보통)', desc: '난이도 보통. 금화 100~250G, 경험치 획득.', reward: 'medium' },
+      { label: '👿 마왕군 토벌 (어려움)', desc: '위험하지만 큰 보상. 금화 300G+, 위협도 대폭 감소.', reward: 'hard' },
+      { label: '📦 물자 수송', desc: '전투 없음. 안전하게 금화 30~60G, 시장 안정.', reward: 'trade' },
+    ],
+  });
+  dayLogs.push({ logClass: 'log-system', text: `📋 길드 게시판에 새로운 의뢰가 올라왔다! 선택지를 확인하세요.` });
+}
+
+function resolveGuildQuest(rewardType, gs) {
+  const alive = gs.characters.filter(c => !c.isDead && !c.isRetired);
+  if (!alive.length) return;
+  const logs = [];
+
+  switch (rewardType) {
+    case 'easy': {
+      const gold = randInt(50, 100);
+      const char = pick(alive);
+      char.gold += gold;
+      gs.world.baseResources.monster_material = (gs.world.baseResources.monster_material||0) + 10;
+      logs.push({ logClass: 'log-party', text: `🐗 ${char.name}이(가) 몬스터 소탕 의뢰를 완수했다. 금화 ${gold}G와 소재를 획득했다.` });
+      break;
+    }
+    case 'medium': {
+      const gold = randInt(100, 250);
+      const targets = alive.slice(0, Math.min(2, alive.length));
+      const goldEach = Math.floor(gold / targets.length);
+      targets.forEach(c => { c.gold += goldEach; c.exp += 20; c.hp = Math.max(1, c.hp - randInt(5, 15)); });
+      logs.push({ logClass: 'log-party', text: `🏯 파티가 던전 공략을 완수했다! 금화 ${gold}G와 경험치를 획득했다. (HP 손실)` });
+      break;
+    }
+    case 'hard': {
+      const success = Math.random() < 0.55;
+      if (success) {
+        const gold = randInt(300, 600);
+        alive.forEach(c => { c.gold += Math.floor(gold / alive.length); c.exp += 35; });
+        gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 10);
+        logs.push({ logClass: 'log-party', text: `👿 마왕군 토벌 성공! 금화 ${gold}G 분배, 위협도 -10!` });
+      } else {
+        alive.forEach(c => { c.hp = Math.max(1, c.hp - randInt(15, 30)); });
+        gs.world.threatLevel = Math.min(100, gs.world.threatLevel + 3);
+        logs.push({ logClass: 'log-party', text: `👿 마왕군 토벌 실패... 심각한 부상을 입고 퇴각했다. (위협도 +3)` });
+      }
+      break;
+    }
+    case 'trade': {
+      const gold = randInt(30, 60);
+      alive.forEach(c => c.gold += Math.floor(gold / alive.length));
+      gs.market && Object.values(gs.market).forEach(m => { m.supplyIndex = Math.min(200, m.supplyIndex + 5); });
+      logs.push({ logClass: 'log-economy', text: `📦 물자 수송 완료. 금화 ${gold}G 획득, 시장 공급 안정.` });
+      break;
+    }
+  }
+  appendToLog(logs);
 }
 
 function leaveParty(char, gs) {
@@ -781,10 +930,40 @@ function processBuildings(gs, dayLogs) {
     gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 0.3);
   }
 
+  // 저체력 캐릭터는 인벤토리 포션 자동 사용
+  for (const char of alive) {
+    if (char.hp < char.maxHp * 0.35) {
+      const potIdx = char.inventory.findIndex(it => it.id === 'healing_potion');
+      if (potIdx >= 0) {
+        const pot = char.inventory[potIdx];
+        const heal = randInt(20, 35);
+        char.hp = Math.min(char.maxHp, char.hp + heal);
+        pot.qty = (pot.qty || 1) - 1;
+        if (pot.qty <= 0) char.inventory.splice(potIdx, 1);
+        dayLogs.push({ logClass: 'log-status', text: `🧪 ${char.name}이(가) 치유 포션을 마셨다. (HP +${heal})` });
+      }
+      // 포션 없고 골드 있으면 시장에서 자동 구매
+      else if (char.gold >= 50 && gs.market?.healing_potion?.currentPrice <= char.gold) {
+        const price = gs.market.healing_potion.currentPrice;
+        if (char.gold >= price) {
+          char.gold -= price;
+          gs.world.townGold = (gs.world.townGold || 0) + price;
+          const heal = randInt(20, 35);
+          char.hp = Math.min(char.maxHp, char.hp + heal);
+          gs.market.healing_potion.supplyIndex = Math.max(0, gs.market.healing_potion.supplyIndex - 5);
+          dayLogs.push({ logClass: 'log-status', text: `🧪 ${char.name}이(가) 치유 포션을 구매해 마셨다. (-${price}G, HP +${heal})` });
+        }
+      }
+    }
+  }
+
   // Each character has a 35% chance to visit each built building
+  // 중독된 캐릭터는 성당 우선 방문 (70%)
   for (const char of alive) {
     for (const [bId, active] of Object.entries(gs.world.buildings)) {
-      if (!active || Math.random() > 0.35) continue;
+      if (!active) continue;
+      const visitChance = (bId === 'temple' && char.statusEffects.includes('poison')) ? 0.70 : 0.35;
+      if (Math.random() > visitChance) continue;
 
       switch (bId) {
         case 'inn': {

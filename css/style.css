@@ -1295,6 +1295,47 @@ input:checked + .toggle-slider::after {
 .mt4 { margin-top: 4px; }
 .mt8 { margin-top: 8px; }
 
+/* ─── CHOICE PENDING BANNER ─── */
+.choice-pending-banner {
+  background: linear-gradient(90deg, #7b3f00, #c0392b);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-bottom: 6px;
+  animation: pulse-warn 1.8s ease-in-out infinite;
+}
+@keyframes pulse-warn {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}
+
+/* ─── CHOICE BUTTONS IN MODAL ─── */
+#story-choice-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.btn-choice {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  padding: 10px 14px;
+  text-align: left;
+  cursor: pointer;
+  line-height: 1.5;
+  transition: border-color 0.15s, background 0.15s;
+}
+.btn-choice:hover {
+  border-color: var(--accent);
+  background: var(--bg-tertiary);
+}
+.btn-choice strong { color: var(--gold); display: block; margin-bottom: 2px; }
+.btn-choice small { color: var(--text-muted); font-size: 11px; }
+
 /* ─── TOOLTIP SYSTEM ─── */
 [data-tooltip] {
   position: relative;
