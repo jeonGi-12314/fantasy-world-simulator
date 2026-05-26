@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pandoc \"C:\\\\Users\\\\User\\\\Desktop\\\\Fantasy_World_Simulator.docx\" -o \"C:\\\\Users\\\\User\\\\Desktop\\\\FWS_content.md\")",
+      "mcp__Windows-MCP__PowerShell",
+      "Bash(npx --yes serve --version)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npx serve *)",
+      "Bash(npx surge *)",
+      "Bash(where gh *)",
+      "Bash(where netlify *)",
+      "Bash(where vercel *)",
+      "PowerShell(Test-Path \"$env:USERPROFILE\\\\.netrc\"; if \\(Test-Path \"$env:USERPROFILE\\\\.surge\"\\) { Get-Content \"$env:USERPROFILE\\\\.surge\" })",
+      "PowerShell(gh auth status 2>&1)"
+    ]
+  }
+}
