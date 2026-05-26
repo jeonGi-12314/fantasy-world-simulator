@@ -87,6 +87,12 @@ async function nextDay() {
     // 9b. Guild quest check
     processGuildQuests(gs, dayLogs);
 
+    // 9c. Equipment purchase attempts
+    processEquipmentPurchases(aliveChars, gs, dayLogs);
+
+    // 9d. Debt repayment
+    processDebts(aliveChars, gs, dayLogs);
+
     // 10. Party checks
     processParties(aliveChars, gs, dayLogs);
 
@@ -260,6 +266,24 @@ function applyEventResult(char, gs, result, dayLogs) {
     char.statusEffects = [];
   }
 
+  // Equipment drop from event
+  if (result.equipDrop) {
+    const drop = result.equipDrop;
+    const def = EQUIPMENT_DEFS[drop.id];
+    if (def) {
+      const slot = def.slot;
+      const current = char.equipment[slot];
+      const currentTier = current ? (EQUIPMENT_DEFS[current.id]?.tier ?? -1) : -1;
+      if (def.tier > currentTier) {
+        equipItem(char, drop, dayLogs);
+      } else {
+        // 이미 좋은 장비 보유 → 인벤토리
+        char.inventory.push({ id: drop.id, name: def.name, icon: def.icon, qty: 1 });
+        dayLogs.push({ logClass: 'log-system', text: `🎁 ${char.name}이(가) ${def.icon} ${def.name}을(를) 획득했다. (인벤토리)` });
+      }
+    }
+  }
+
   // Base resource collection
   if (result.baseResource) {
     for (const [res, amt] of Object.entries(result.baseResource)) {
@@ -364,13 +388,25 @@ function processInteractions(aliveChars, gs, dayLogs) {
       updateAffection(a, b, iResult.affectionDelta, gs);
     }
 
-    // Gold transfer
+    // Gold transfer — interact_trade (b가 실제 부족할 때만)
     if (iResult.goldTransfer) {
-      const amt = Math.min(a.gold, iResult.goldTransfer);
-      a.gold -= amt;
-      b.gold += amt;
-      // Create debtor relation
-      addOrUpdateRelation(b, a.id, 'debtor', -10);
+      const amt = Math.min(a.gold - 50, iResult.goldTransfer); // a 생활비 50G 보장
+      if (amt > 0) {
+        a.gold -= amt;
+        b.gold += amt;
+        // 채무 추적 구조로 등록
+        if (!b.debts) b.debts = [];
+        b.debts.push({
+          creditorId: a.id,
+          amount: amt,
+          remaining: amt,
+          dayTaken: gs.day,
+          deadline: gs.day + 7,
+          purpose: '긴급 생활비',
+        });
+        addOrUpdateRelation(b, a.id, 'debtor', 0);
+        addOrUpdateRelation(a, b.id, 'creditor', 0);
+      }
     }
 
     // Party formation
@@ -677,6 +713,168 @@ function disbandParty(party, gs, dayLogs) {
     if (m) m.currentPartyId = null;
   }
   gs.parties = gs.parties.filter(p => p.id !== party.id);
+}
+
+// ═══════════════════════════════════════
+// EQUIPMENT SYSTEM
+// ═══════════════════════════════════════
+
+// 장비 장착 — _equipBonuses에 누적, 기존 장비 해제 후 새 장비 적용
+function equipItem(char, item, dayLogs) {
+  if (!item || !item.id) return;
+  const def = EQUIPMENT_DEFS[item.id];
+  if (!def) return;
+  const slot = def.slot;
+
+  if (!char._equipBonuses) char._equipBonuses = { str:0, int:0, fai:0, agi:0, cha:0, end:0 };
+
+  // 기존 장비 보너스 제거
+  const old = char.equipment[slot];
+  if (old) {
+    const oldDef = EQUIPMENT_DEFS[old.id];
+    if (oldDef) {
+      for (const [stat, bonus] of Object.entries(oldDef.bonus)) {
+        char._equipBonuses[stat] = (char._equipBonuses[stat] || 0) - bonus;
+      }
+    }
+    // 기존 장비 인벤토리로
+    char.inventory.push({ id: old.id, name: old.name, icon: old.icon, qty: 1 });
+  }
+
+  // 새 장비 장착
+  char.equipment[slot] = { id: item.id, name: def.name, icon: def.icon, tier: def.tier };
+  for (const [stat, bonus] of Object.entries(def.bonus)) {
+    char._equipBonuses[stat] = (char._equipBonuses[stat] || 0) + bonus;
+  }
+
+  // maxHp 재계산 (end 보너스 반영)
+  const effEnd = (char.stats.end || 0) + (char._equipBonuses.end || 0);
+  const effStr = (char.stats.str || 0) + (char._equipBonuses.str || 0);
+  char.maxHp = 50 + effStr * 5 + effEnd * 3;
+  char.hp = Math.min(char.maxHp, char.hp);
+
+  if (dayLogs) {
+    const bonusStr = Object.entries(def.bonus).map(([k,v]) => `${STAT_DEF[k]?.abbr||k}+${v}`).join(', ');
+    dayLogs.push({ logClass: 'log-system', text: `🛡 ${char.name}이(가) ${def.icon} ${def.name}을(를) 장착했다! (${bonusStr})` });
+  }
+}
+
+// 장비 구매 & 채무 시도 — 매일 10% 확률
+function processEquipmentPurchases(aliveChars, gs, dayLogs) {
+  for (const char of aliveChars) {
+    if (Math.random() > 0.10) continue;
+
+    const slotsToCheck = ['weapon', 'armor'];
+    for (const slot of slotsToCheck) {
+      const current = char.equipment[slot];
+      const currentTier = current ? (EQUIPMENT_DEFS[current.id]?.tier ?? -1) : -1;
+
+      // 다음 티어 장비 후보 (성향·직업 적합 우선)
+      const candidates = Object.entries(EQUIPMENT_DEFS)
+        .filter(([id, def]) => def.slot === slot && def.tier === currentTier + 1)
+        .sort((a, b) => a[1].price - b[1].price);
+
+      if (!candidates.length) continue;
+
+      // 직업에 맞는 장비 선택
+      let [itemId, itemDef] = candidates[0];
+      if (char.class === 'mage' || char.class === 'sage' || char.class === 'necromancer') {
+        const magicOpt = candidates.find(([id]) => id === 'weapon_staff' || id === 'armor_robe');
+        if (magicOpt) [itemId, itemDef] = magicOpt;
+      } else if (char.class === 'paladin' || char.class === 'knight') {
+        const holyOpt = candidates.find(([id]) => id === 'weapon_holy' || id === 'armor_plate');
+        if (holyOpt) [itemId, itemDef] = holyOpt;
+      }
+
+      const price = itemDef.price;
+
+      if (char.gold >= price) {
+        // 자력 구매
+        char.gold -= price;
+        gs.world.townGold = (gs.world.townGold || 0) + Math.floor(price * 0.15);
+        gs.market.weapon_basic && (gs.market.weapon_basic.supplyIndex -= 3);
+        equipItem(char, { id: itemId, ...itemDef }, dayLogs);
+        break;
+      } else {
+        // 금화 부족 → 채무 시도 (기존 채무 없을 때만)
+        const shortage = price - char.gold;
+        if (shortage <= 300 && (!char.debts || char.debts.length === 0)) {
+          const creditor = aliveChars.find(c =>
+            c.id !== char.id &&
+            c.gold >= price + 150 &&
+            (getRelationship(c, char.id)?.affection || 0) >= 25
+          );
+          if (creditor) {
+            creditor.gold -= price;
+            char.gold += price;
+            char.gold -= price;
+            gs.world.townGold = (gs.world.townGold || 0) + Math.floor(price * 0.15);
+            equipItem(char, { id: itemId, ...itemDef }, dayLogs);
+
+            if (!char.debts) char.debts = [];
+            char.debts.push({
+              creditorId: creditor.id,
+              amount: price,
+              remaining: price,
+              dayTaken: gs.day,
+              deadline: gs.day + 7,
+              purpose: itemDef.name + ' 구매',
+            });
+            addOrUpdateRelation(char, creditor.id, 'debtor', 0);
+            addOrUpdateRelation(creditor, char.id, 'creditor', 0);
+            dayLogs.push({ logClass: 'log-economy', text: `💸 ${char.name}이(가) ${creditor.name}에게 ${price}G를 빌려 ${itemDef.icon} ${itemDef.name}을(를) 장착했다. 7일 내 상환 예정.` });
+            break;
+          }
+        }
+      }
+    }
+  }
+}
+
+// 채무 상환 — 매일 잉여 금화의 40% 자동 상환
+function processDebts(aliveChars, gs, dayLogs) {
+  for (const char of aliveChars) {
+    if (!char.debts || char.debts.length === 0) continue;
+
+    for (let i = char.debts.length - 1; i >= 0; i--) {
+      const debt = char.debts[i];
+      const surplus = Math.max(0, char.gold - 50); // 50G 생활비 제외
+      if (surplus > 0) {
+        const payment = Math.min(debt.remaining, Math.ceil(surplus * 0.40));
+        if (payment > 0) {
+          char.gold -= payment;
+          debt.remaining -= payment;
+          const creditor = gs.characters.find(c => c.id === debt.creditorId);
+          if (creditor && !creditor.isDead) {
+            creditor.gold += payment;
+            updateAffection(char, creditor, 1, gs);
+          }
+          if (debt.remaining <= 0) {
+            const creditorName = gs.characters.find(c => c.id === debt.creditorId)?.name || '길드';
+            dayLogs.push({ logClass: 'log-economy', text: `✅ ${char.name}이(가) ${creditorName}에게 빌린 금화 ${debt.amount}G를 모두 갚았다! (목적: ${debt.purpose})` });
+            // 채무 관계 해제
+            const dRel = char.relationships.find(r => r.targetId === debt.creditorId && r.type === 'debtor');
+            if (dRel) dRel.type = 'friend';
+            const cRel = gs.characters.find(c => c.id === debt.creditorId)?.relationships.find(r => r.targetId === char.id && r.type === 'creditor');
+            if (cRel) cRel.type = 'friend';
+            char.debts.splice(i, 1);
+          }
+        }
+      }
+
+      // 연체 패널티 (7일 초과, 3일마다 호감도 하락)
+      if (debt.remaining > 0 && gs.day > debt.deadline) {
+        const overdue = gs.day - debt.deadline;
+        if (overdue % 3 === 0) {
+          const creditor = gs.characters.find(c => c.id === debt.creditorId);
+          if (creditor && !creditor.isDead) {
+            updateAffection(char, creditor, -8, gs);
+            dayLogs.push({ logClass: 'log-economy', text: `💢 ${char.name}이(가) ${creditor.name}에게 진 빚 ${debt.remaining}G를 아직 갚지 못했다. 관계가 악화됐다.` });
+          }
+        }
+      }
+    }
+  }
 }
 
 // ─── RELATIONSHIP UTILITIES ───────────────
@@ -1021,19 +1219,56 @@ function processBuildings(gs, dayLogs) {
           break;
         }
         case 'shop': {
-          // Discount: save a bit on hypothetical purchase
-          const save = Math.floor(char.gold * 0.01);
-          char.gold += save;
-          gs.world.totalGoldCirculated += save;
+          // 상점: 저렴한 장비·소모품 구매 기회
           char.actionCounts.trade = (char.actionCounts.trade || 0) + 1;
+          // 기본 장신구 구매 시도 (장신구 미착용 상태)
+          if (!char.equipment.accessory && Math.random() < 0.30) {
+            const shopAcc = Object.entries(EQUIPMENT_DEFS)
+              .filter(([,d]) => d.slot === 'accessory' && d.tier === 1 && char.gold >= d.price);
+            if (shopAcc.length) {
+              const [aId, aDef] = shopAcc[Math.floor(Math.random() * shopAcc.length)];
+              char.gold -= aDef.price;
+              gs.world.townGold = (gs.world.townGold || 0) + aDef.price;
+              equipItem(char, { id: aId, ...aDef }, dayLogs);
+            }
+          }
+          // 포션 구매 (HP 60% 이하, 인벤토리에 없을 때)
+          if (char.hp < char.maxHp * 0.6 && !char.inventory.some(i => i.id === 'healing_potion')) {
+            const price = gs.market?.healing_potion?.currentPrice || 50;
+            if (char.gold >= price) {
+              char.gold -= price;
+              gs.world.townGold = (gs.world.townGold || 0) + price;
+              char.inventory.push({ id: 'healing_potion', name: '치유 포션', icon: '🧪', qty: 1 });
+            }
+          }
           break;
         }
         case 'forge': {
+          // 기본 자재 채집
           const cost = 3;
-          if (char.gold < cost) break;
-          char.gold -= cost;
-          gs.world.townGold = (gs.world.townGold || 0) + cost;
-          gs.world.baseResources.iron_ore = (gs.world.baseResources.iron_ore || 0) + 2;
+          if (char.gold >= cost) {
+            char.gold -= cost;
+            gs.world.townGold = (gs.world.townGold || 0) + cost;
+            gs.world.baseResources.iron_ore = (gs.world.baseResources.iron_ore || 0) + 2;
+          }
+          // 철광석 15개 이상이면 장비 제작 시도 (20%)
+          if ((gs.world.baseResources.iron_ore || 0) >= 15 && Math.random() < 0.20) {
+            const forgeable = Object.entries(EQUIPMENT_DEFS).filter(([,d]) => d.forge && d.tier <= 2);
+            if (forgeable.length) {
+              const [fId, fDef] = forgeable[Math.floor(Math.random() * forgeable.length)];
+              const slot = fDef.slot;
+              const cur = char.equipment[slot];
+              const curTier = cur ? (EQUIPMENT_DEFS[cur.id]?.tier ?? -1) : -1;
+              gs.world.baseResources.iron_ore -= 15;
+              if (fDef.tier > curTier) {
+                equipItem(char, { id: fId, ...fDef }, dayLogs);
+                dayLogs.push({ logClass: 'log-system', text: `⚒ ${char.name}이(가) 대장간에서 ${fDef.icon} ${fDef.name}을(를) 제작해 장착했다! (-15 철광석)` });
+              } else {
+                char.inventory.push({ id: fId, name: fDef.name, icon: fDef.icon, qty: 1 });
+                dayLogs.push({ logClass: 'log-system', text: `⚒ 대장간에서 ${fDef.icon} ${fDef.name}이(가) 제작됐다. (인벤토리)` });
+              }
+            }
+          }
           break;
         }
         case 'warehouse': {

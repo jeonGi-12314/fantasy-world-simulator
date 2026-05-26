@@ -4,6 +4,31 @@
 
 'use strict';
 
+// ─── EQUIPMENT DEFINITIONS ───────────────
+// slot: 'weapon' | 'armor' | 'accessory'
+// tier: 0(초급)~3(희귀) — 높을수록 상위 장비
+// bonus: char.stats에 더해지는 보너스
+const EQUIPMENT_DEFS = {
+  // ── 무기 ──────────────────────────────
+  weapon_wooden: { name: '목검',        slot: 'weapon',    tier: 0, icon: '🪵', bonus: { str: 1 },           price: 30,  forge: false, desc: 'STR +1. 초보 모험가의 연습용 목검.' },
+  weapon_dagger: { name: '단검',        slot: 'weapon',    tier: 1, icon: '🗡',  bonus: { str: 2, agi: 1 },  price: 100, forge: true,  desc: 'STR +2, AGI +1. 빠르고 날카로운 단검.' },
+  weapon_sword:  { name: '롱소드',      slot: 'weapon',    tier: 2, icon: '⚔',  bonus: { str: 3 },           price: 220, forge: true,  desc: 'STR +3. 균형 잡힌 표준 장검.' },
+  weapon_staff:  { name: '마법 지팡이', slot: 'weapon',    tier: 2, icon: '🪄', bonus: { int: 3 },           price: 250, forge: false, desc: 'INT +3. 마력이 깃든 마법사의 지팡이.' },
+  weapon_holy:   { name: '성검',        slot: 'weapon',    tier: 3, icon: '✨', bonus: { str: 2, fai: 3 },  price: 500, forge: false, desc: 'STR +2, FAI +3. 신성한 빛이 깃든 검.' },
+  weapon_dark:   { name: '저주의 검',   slot: 'weapon',    tier: 3, icon: '🌑', bonus: { str: 4, int: 1 },  price: 450, forge: false, desc: 'STR +4, INT +1. 어둠의 힘이 깃든 금지의 검.' },
+  // ── 방어구 ────────────────────────────
+  armor_cloth:   { name: '천 갑옷',     slot: 'armor',     tier: 0, icon: '👘', bonus: { end: 1 },           price: 40,  forge: false, desc: 'END +1. 기본 천 갑옷.' },
+  armor_leather: { name: '가죽 갑옷',   slot: 'armor',     tier: 1, icon: '🛡', bonus: { end: 2, str: 1 },  price: 120, forge: true,  desc: 'END +2, STR +1. 튼튼한 가죽 갑옷.' },
+  armor_chain:   { name: '사슬 갑옷',   slot: 'armor',     tier: 2, icon: '⛓', bonus: { end: 3 },           price: 230, forge: true,  desc: 'END +3. 유연하고 방어력이 높은 사슬 갑옷.' },
+  armor_plate:   { name: '판금 갑옷',   slot: 'armor',     tier: 3, icon: '🔰', bonus: { end: 4, str: 1 },  price: 480, forge: true,  desc: 'END +4, STR +1. 최고의 방어력을 자랑하는 판금 갑옷.' },
+  armor_robe:    { name: '마법 로브',   slot: 'armor',     tier: 2, icon: '🧥', bonus: { int: 2, end: 1 },  price: 200, forge: false, desc: 'INT +2, END +1. 마나 흐름을 강화하는 로브.' },
+  // ── 장신구 ────────────────────────────
+  acc_ring:      { name: '체력의 반지', slot: 'accessory', tier: 1, icon: '💍', bonus: { end: 2 },           price: 150, forge: false, desc: 'END +2. 생명력을 강화시키는 반지.' },
+  acc_amulet:    { name: '마력의 목걸이',slot:'accessory', tier: 2, icon: '📿', bonus: { int: 2, fai: 1 },  price: 260, forge: false, desc: 'INT +2, FAI +1. 마력을 증폭시키는 목걸이.' },
+  acc_charm:     { name: '행운의 부적', slot: 'accessory', tier: 1, icon: '🍀', bonus: { agi: 2, cha: 1 },  price: 180, forge: false, desc: 'AGI +2, CHA +1. 행운을 부르는 부적.' },
+  acc_cape:      { name: '질주의 망토', slot: 'accessory', tier: 2, icon: '🧣', bonus: { agi: 3 },           price: 220, forge: false, desc: 'AGI +3. 이동 속도를 높여주는 마법 망토.' },
+};
+
 // ─── PORTRAIT ICONS ──────────────────────
 const PORTRAIT_ICONS = {
   male:   ['🧔','👨','👦','🧙‍♂️','⚔','🏹','🛡','🦸‍♂️','🤺','🧝‍♂️'],
@@ -519,6 +544,8 @@ function createCharacter(opts = {}) {
     classCondProgress: {},
     statusEffects: [],
     equipment: { weapon: null, armor: null, accessory: null },
+    _equipBonuses: { str:0, int:0, fai:0, agi:0, cha:0, end:0 },
+    debts: [],   // [{ creditorId, amount, remaining, dayTaken, deadline, purpose }]
     inventory: [],
     relationships: (opts.relationships || []).map(r => ({ ...r, affection: r.affection || 30 })),
     currentPartyId: null,

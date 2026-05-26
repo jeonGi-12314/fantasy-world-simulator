@@ -1295,6 +1295,27 @@ input:checked + .toggle-slider::after {
 .mt4 { margin-top: 4px; }
 .mt8 { margin-top: 8px; }
 
+/* ─── DEBT / EQUIPMENT CHIPS ─── */
+.item-chip.debt-chip {
+  background: rgba(220, 50, 50, 0.15);
+  border: 1px solid #c0392b;
+  color: #e57373;
+}
+.item-chip.debt-chip.overdue {
+  background: rgba(220, 50, 50, 0.30);
+  border-color: #f44336;
+  animation: pulse-warn 1.5s infinite;
+}
+.item-chip.empty-slot {
+  opacity: 0.5;
+  font-style: italic;
+}
+.item-chip.equipment {
+  background: rgba(70, 130, 180, 0.15);
+  border: 1px solid #4a90d9;
+  color: var(--text-primary);
+}
+
 /* ─── CHOICE PENDING BANNER ─── */
 .choice-pending-banner {
   background: linear-gradient(90deg, #7b3f00, #c0392b);

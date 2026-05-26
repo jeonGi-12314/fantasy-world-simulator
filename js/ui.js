@@ -337,18 +337,36 @@ function renderInventoryPanel(gs, selectedChar) {
 
 function buildInventorySection(char, gs) {
   const classDef = char.class ? CLASSES[char.class] : null;
+  const slotLabel = { weapon: '⚔ 무기', armor: '🛡 방어구', accessory: '💍 장신구' };
+
   const equipmentHtml = Object.entries(char.equipment).map(([slot, item]) => {
-    const slotName = slot === 'weapon' ? '무기' : slot === 'armor' ? '방어구' : '장신구';
-    return `<div class="item-chip equipment">${slotName}: ${item ? item.name : '—'}</div>`;
+    if (!item) return `<div class="item-chip empty-slot">${slotLabel[slot] || slot}: <span style="color:var(--text-muted)">없음</span></div>`;
+    const def = EQUIPMENT_DEFS?.[item.id];
+    const bonusStr = def ? Object.entries(def.bonus).map(([k,v]) => `${STAT_DEF[k]?.abbr||k}+${v}`).join(' ') : '';
+    return `<div class="item-chip equipment" data-tooltip="${def?.desc || item.name}">${item.icon || ''} ${item.name}${bonusStr ? ` <span style="color:var(--success);font-size:10px">(${bonusStr})</span>` : ''}</div>`;
   }).join('');
 
+  // 채무 표시
+  const debtHtml = (char.debts && char.debts.length > 0)
+    ? char.debts.map(d => {
+        const creditor = gs.characters.find(c => c.id === d.creditorId);
+        const overdue = gs.day > d.deadline;
+        return `<div class="item-chip debt-chip${overdue ? ' overdue' : ''}">💸 ${creditor?.name||'미상'}에게 ${d.remaining}G 채무 (${d.purpose})${overdue ? ' ⚠연체' : ` D-${d.deadline - gs.day}`}</div>`;
+      }).join('')
+    : '';
+
   const inventoryHtml = char.inventory.length
-    ? char.inventory.map(it => `<div class="item-chip ${it.cat || ''}">${it.name} x${it.qty || 1}</div>`).join('')
+    ? char.inventory.map(it => `<div class="item-chip ${it.cat || ''}">${it.icon||''}${it.name} ×${it.qty || 1}</div>`).join('')
     : '<span class="text-muted" style="font-size:12px">인벤토리 비어 있음</span>';
 
   const skillsHtml = char.classSkills.length
     ? char.classSkills.map(s => `<span class="skill-badge">${s}</span>`).join('')
     : '<span class="text-muted" style="font-size:12px">스킬 없음</span>';
+
+  // 장비 보너스 합산 표시
+  const equip = char._equipBonuses || {};
+  const bonusSummary = Object.entries(equip).filter(([,v]) => v !== 0)
+    .map(([k,v]) => `${STAT_DEF[k]?.abbr||k}${v>0?'+':''}${v}`).join(' ');
 
   return `
     <div class="inventory-section">
@@ -356,8 +374,10 @@ function buildInventorySection(char, gs) {
         ${classDef?.icon || '🧑'} ${char.name} ${classDef ? `(${classDef.name})` : '(무직)'}
         <span style="float:right;color:var(--gold);font-weight:700">${numFmt(char.gold)}G</span>
       </div>
+      ${bonusSummary ? `<div style="font-size:11px;color:var(--success);margin-bottom:4px">⬆ 장비 보너스: ${bonusSummary}</div>` : ''}
       <div style="margin:4px 0;font-size:11px;color:var(--text-muted)">장착</div>
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${equipmentHtml}</div>
+      ${debtHtml ? `<div style="margin:4px 0;font-size:11px;color:var(--danger)">채무</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${debtHtml}</div>` : ''}
       <div style="margin:4px 0;font-size:11px;color:var(--text-muted)">소지품</div>
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${inventoryHtml}</div>
       <div style="margin:4px 0;font-size:11px;color:var(--text-muted)">스킬</div>

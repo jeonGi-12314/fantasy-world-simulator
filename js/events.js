@@ -20,11 +20,27 @@ function eun(n) { return josa(n, '는', '은'); }   // 는(no batchim)/은(batch
 function ul(n)  { return josa(n, '를', '을'); }   // 를/을
 function ro(n)  { return josa(n, '로', '으로'); } // 로/으로
 
-// ── Event success roll ──
+// ── Event success roll — 장비 보너스 포함 ──
 function roll(char, statKey) {
-  const statVal = char.stats[statKey] || 0;
+  const base = char.stats[statKey] || 0;
+  const equip = char._equipBonuses?.[statKey] || 0;
+  const statVal = base + equip;
   const fatigueDebt = Math.floor(char.fatigue / 20);
   return randInt(1, 100) + statVal * 5 - fatigueDebt * 5;
+}
+
+// ── 장비 드랍 헬퍼 ──
+function rollEquipDrop(char, tier = 1) {
+  // 현재 장착 장비보다 좋은 것만 드랍
+  const candidates = Object.entries(EQUIPMENT_DEFS).filter(([id, def]) => {
+    const slot = def.slot;
+    const current = char.equipment?.[slot];
+    const currentTier = current ? (EQUIPMENT_DEFS[current.id]?.tier ?? -1) : -1;
+    return def.tier <= tier && def.tier > currentTier;
+  });
+  if (!candidates.length) return null;
+  const [id, def] = candidates[Math.floor(Math.random() * candidates.length)];
+  return { id, ...def };
 }
 
 // ── Effect builder ──
@@ -92,6 +108,7 @@ const EVENT_POOL = [
       const goldGain = success ? randInt(20, 60) : 0;
       const hpLoss  = success ? randInt(0, 8)   : randInt(10, 20);
       const addAction = { combat: 1 };
+      const drop = success && Math.random() < 0.10 ? rollEquipDrop(char, 1) : null;
       return {
         logClass: 'log-combat',
         text: success
@@ -100,6 +117,7 @@ const EVENT_POOL = [
         effects: fx({ hp: -hpLoss, gold: goldGain, exp: success ? 15 : 5, fatigue: 8 }),
         supply: { monster_material: success ? 5 : 0 },
         addAction,
+        equipDrop: drop,
       };
     },
   },
@@ -119,6 +137,7 @@ const EVENT_POOL = [
       const goldGain = success ? randInt(30, 80) : 0;
       const hpLoss   = success ? randInt(3, 12)  : randInt(15, 30);
       const expGain  = success ? 20 : 8;
+      const drop2 = success && Math.random() < 0.12 ? rollEquipDrop(char, 1) : null;
       return {
         logClass: 'log-combat',
         text: success
@@ -128,6 +147,7 @@ const EVENT_POOL = [
         supply: { monster_material: success ? 10 : 0 },
         addAction: { combat: 1 },
         statusAdd: success ? null : (randInt(1,100) > 80 ? 'fear' : null),
+        equipDrop: drop2,
       };
     },
   },
@@ -147,6 +167,7 @@ const EVENT_POOL = [
       const goldGain = success ? randInt(50, 150) : randInt(0, 20);
       const hpLoss   = success ? randInt(5, 15)   : randInt(20, 40);
       const expGain  = success ? 30 : 10;
+      const dropD = success && Math.random() < 0.22 ? rollEquipDrop(char, 2) : null;
       return {
         logClass: 'log-combat',
         text: success
@@ -156,6 +177,7 @@ const EVENT_POOL = [
         supply: { monster_material: success ? 20 : 0, magic_stone: success ? 5 : 0 },
         addAction: { combat: 1 },
         statusAdd: success ? null : (randInt(1,100) > 70 ? pick(['poison', 'fear']) : null),
+        equipDrop: dropD,
       };
     },
   },
