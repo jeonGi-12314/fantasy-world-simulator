@@ -37,12 +37,16 @@ function recalcMarketPrices(gs) {
 
     // 공급은 자연 소모로 서서히 감소 (캐릭터 구매·판매로만 보충)
     // 단, 식료품·소모품은 소량 자연 생산 (완전 고갈 방지)
+    // 길드 계약서는 길드에서 자체 발행 → 항상 충분히 유지
     const isBasic = ['food','consumable'].includes(item.cat);
-    const naturalDecay = isBasic ? -0.2 : -0.5; // 기본 소모율
-    const naturalRegen = isBasic ? 0.8 : 0.0;   // 식료품·소모품만 소폭 자연 생산
-    item.supplyIndex = Math.max(isBasic ? 10 : 2, item.supplyIndex + naturalDecay + naturalRegen);
-    // 수요는 여전히 균형으로 복귀
-    item.demandIndex = Math.max(5, item.demandIndex + (100 - item.demandIndex) * 0.02);
+    const isGuildContract = (id === 'guild_contract');
+    const naturalDecay = isBasic ? -0.2 : isGuildContract ? -0.0 : -0.5;
+    const naturalRegen = isBasic ? 0.8  : isGuildContract ? 2.0  : 0.0;
+    const supplyMin     = isBasic ? 10   : isGuildContract ? 80   : 2;
+    item.supplyIndex = Math.max(supplyMin, item.supplyIndex + naturalDecay + naturalRegen);
+    // 수요는 균형으로 복귀 (소모품/식료품/전리품은 빠르게 회복)
+    const demandRestoreRate = ['consumable','food','loot'].includes(item.cat) ? 0.04 : 0.02;
+    item.demandIndex = Math.max(5, item.demandIndex + (100 - item.demandIndex) * demandRestoreRate);
   }
 }
 

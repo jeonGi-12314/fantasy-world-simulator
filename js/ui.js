@@ -575,11 +575,15 @@ function buildInventorySection(char, gs) {
   const classDef = char.class ? CLASSES[char.class] : null;
   const slotLabel = { weapon: '⚔ 무기', armor: '🛡 방어구', accessory: '💍 장신구' };
 
+  const GRADE_COLORS = { uncommon: '#4caf50', rare: '#2196f3', epic: '#9c27b0', legendary: '#ff9800' };
   const equipmentHtml = Object.entries(char.equipment).map(([slot, item]) => {
     if (!item) return `<div class="item-chip empty-slot">${slotLabel[slot] || slot}: <span style="color:var(--text-muted)">없음</span></div>`;
     const def = EQUIPMENT_DEFS?.[item.id];
-    const bonusStr = def ? Object.entries(def.bonus).map(([k,v]) => `${STAT_DEF[k]?.abbr||k}+${v}`).join(' ') : '';
-    return `<div class="item-chip equipment" data-tooltip="${def?.desc || item.name}">${item.icon || ''} ${item.name}${bonusStr ? ` <span style="color:var(--success);font-size:10px">(${bonusStr})</span>` : ''}</div>`;
+    const gradeMult = item.gradeMult || 1.0;
+    const bonusStr = def ? Object.entries(def.bonus).map(([k,v]) => `${STAT_DEF[k]?.abbr||k}+${Math.round(v * gradeMult)}`).join(' ') : '';
+    const gradeColor = item.grade ? (GRADE_COLORS[item.grade] || '') : '';
+    const gradeBadge = item.gradeName && item.gradeName !== '일반' ? ` <span style="color:${gradeColor};font-size:10px;font-weight:bold">[${item.gradeName}]</span>` : '';
+    return `<div class="item-chip equipment" data-tooltip="${def?.desc || item.name}">${item.icon || ''} ${item.name}${gradeBadge}${bonusStr ? ` <span style="color:var(--success);font-size:10px">(${bonusStr})</span>` : ''}</div>`;
   }).join('');
 
   // 채무 표시
@@ -598,19 +602,22 @@ function buildInventorySection(char, gs) {
         const tierBadge = def
           ? `<span class="inv-tier-badge tier-${def.tier}">${TIER_LABEL[def.tier] || ''}</span>`
           : '';
+        const gradeColor = it.grade ? (GRADE_COLORS[it.grade] || '') : '';
+        const gradeBadge = it.gradeName && it.gradeName !== '일반'
+          ? `<span style="color:${gradeColor};font-size:9px;font-weight:bold;margin-left:2px">[${it.gradeName}]</span>` : '';
         const qty = it.qty > 1 ? ` <span style="color:var(--text-muted)">×${it.qty}</span>` : '';
-        return `<div class="item-chip ${it.cat || ''}">${it.icon || ''}${it.name}${tierBadge}${qty}</div>`;
+        return `<div class="item-chip ${it.cat || ''}">${it.icon || ''}${it.name}${tierBadge}${gradeBadge}${qty}</div>`;
       }).join('')
     : '<span class="text-muted" style="font-size:12px">인벤토리 비어 있음</span>';
 
-  // ── 스킬 UI: 일반 스킬 3개 + 침공 스킬 1개 — 모두 동일한 팝업 스타일 + 레벨 표시 ──
-  // 기존 캐릭터 호환: classSkills에 침공 스킬이 없으면 RAID_SKILL_TABLE에서 보충
+  // ── 스킬 UI: 4개 스킬 모두 일반 스킬 표시 (침공 구분 없음) ──
+  // 기존 캐릭터 호환: RAID_SKILL_TABLE 스킬이 classSkills에 없으면 보충
   const _raidSkDef = typeof RAID_SKILL_TABLE !== 'undefined' && char.class ? RAID_SKILL_TABLE[char.class] : null;
-  const _hasRaidInCS = (char.classSkills || []).some(sk => typeof sk === 'object' && sk.isRaid);
+  const _raidSkInCS = _raidSkDef && (char.classSkills || []).some(sk => (typeof sk === 'object' ? sk.name : sk) === _raidSkDef.name);
   const displaySkills = [
-    ...(char.classSkills || []),
-    ...(!_hasRaidInCS && _raidSkDef
-      ? [{ name: _raidSkDef.name, mpCost: _raidSkDef.mpCost, effect: _raidSkDef.effect, isRaid: true }]
+    ...(char.classSkills || []).map(sk => typeof sk === 'object' ? { ...sk, isRaid: false } : sk),
+    ...(!_raidSkInCS && _raidSkDef
+      ? [{ name: _raidSkDef.name, mpCost: _raidSkDef.mpCost, effect: _raidSkDef.effect }]
       : []),
   ];
 
@@ -618,26 +625,22 @@ function buildInventorySection(char, gs) {
   const STAR_BONUS_LABELS = {
     2: 'MP -1 감소',
     3: '효과 +15%',
-    4: '침공 내 2회 가능',
+    4: '전투 내 2회 사용 가능',
     5: 'MP -2 추가 · 효과 +30%',
   };
 
-  // 스킬 팝업 칩 렌더러 — 침공/일반 동일 스타일, 모두 레벨 표시
-  function _skillChip(name, mpCost, effect, skillKey, isRaid) {
+  // 스킬 팝업 칩 렌더러 — 모두 일반 스킬 스타일
+  function _skillChip(name, mpCost, effect, skillKey) {
     const lvl = (char.skillLevels || {})[skillKey] || 1;
     const stars = '★'.repeat(lvl) + '☆'.repeat(5 - lvl);
-    const typeLabel = isRaid ? '⚔ 침공' : '📖 일반';
-    const chipBg     = isRaid ? 'rgba(255,23,68,0.10)' : 'rgba(100,180,255,0.08)';
-    const chipBorder = isRaid ? '#ff1744' : '#546e7a';
-    const chipColor  = isRaid ? '#ff8a80' : '#b0bec5';
     const starBonusHtml = lvl >= 2
       ? `<div class="skill-popup-star-bonus">✦ ${STAR_BONUS_LABELS[lvl] || ''}</div>` : '';
     const nextLvl = lvl < 5 ? lvl + 1 : null;
     const nextBonusHtml = nextLvl
       ? `<div class="skill-popup-next">다음 별: ${STAR_BONUS_LABELS[nextLvl] || ''}</div>` : '';
-    return `<div class="skill-popup-chip" style="background:${chipBg};border-color:${chipBorder};color:${chipColor}">
+    return `<div class="skill-popup-chip" style="background:rgba(100,180,255,0.08);border-color:#546e7a;color:#b0bec5">
       <div class="skill-popup-header">
-        <span class="skill-popup-type">${typeLabel}</span>
+        <span class="skill-popup-type">📖 스킬</span>
         <strong class="skill-popup-name">${name}</strong>
         <span class="skill-popup-mp">MP -${mpCost}</span>
       </div>
@@ -652,8 +655,7 @@ function buildInventorySection(char, gs) {
         const skName   = typeof sk === 'object' ? sk.name   : sk;
         const skMp     = typeof sk === 'object' ? sk.mpCost : 0;
         const skEffect = typeof sk === 'object' ? sk.effect : '—';
-        const skIsRaid = typeof sk === 'object' ? !!sk.isRaid : false;
-        return _skillChip(skName, skMp, skEffect, skName, skIsRaid);
+        return _skillChip(skName, skMp, skEffect, skName);
       }).join('')
     : '<span class="text-muted" style="font-size:12px">스킬 없음</span>';
 
@@ -746,7 +748,7 @@ function renderRelationsPanel(gs, selectedChar) {
       const isNeg = rel.affection < 0;
       const targetDead = target.isDead;
 
-      // A → B (이 캐릭터 → 대상)
+      // A → B (이 캐릭터 → 대상) — 목록에서는 단방향만 표시 (그래프에서 양방향 확인 가능)
       html += `
         <div class="relation-row">
           <div style="font-size:10px;min-width:22px;color:#90a4ae;white-space:nowrap">→</div>
@@ -760,25 +762,6 @@ function renderRelationsPanel(gs, selectedChar) {
           <div class="affection-val">${Math.round(rel.affection)}</div>
         </div>
       `;
-
-      // B → A (대상 → 이 캐릭터)
-      const reverseRel = target.relationships?.find(r => r.targetId === char.id);
-      if (reverseRel) {
-        const revDef = RELATION_TYPES[reverseRel.type] || { name: reverseRel.type, icon: '?', positive: true };
-        const revPct = Math.max(0, ((reverseRel.affection + 100) / 300) * 100);
-        const revNeg = reverseRel.affection < 0;
-        html += `
-          <div class="relation-row" style="opacity:0.72;margin-left:8px;margin-top:-2px">
-            <div style="font-size:10px;min-width:22px;color:#78909c;white-space:nowrap">←</div>
-            <div style="font-size:11px;min-width:65px;color:var(--text-muted)">${target.name}</div>
-            <span class="relation-type-badge" style="opacity:0.8">${revDef.icon} ${revDef.name}</span>
-            <div class="affection-bar">
-              <div class="affection-fill ${revNeg ? 'neg' : ''}" style="width:${revPct}%"></div>
-            </div>
-            <div class="affection-val">${Math.round(reverseRel.affection)}</div>
-          </div>
-        `;
-      }
     }
     html += '</div>';
   }

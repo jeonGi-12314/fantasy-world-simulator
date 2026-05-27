@@ -152,6 +152,9 @@ async function nextDay() {
     // 9f-3. MP regeneration for magic/faith classes
     processMP(aliveChars, dayLogs);
 
+    // 9f-3b. 마나 포션 자동 구매 (MP 부족 시)
+    processManaConsumables(aliveChars, gs, dayLogs);
+
     // 9f-4. Rare market equipment offer (시장에 직접 등장)
     processRareMarketOffer(gs, dayLogs);
     processRareOfferAutoBuy(aliveChars, gs, dayLogs);
@@ -418,7 +421,7 @@ function applyEventResult(char, gs, result, dayLogs) {
     char.statusEffects = [];
   }
 
-  // Equipment drop from event
+  // Equipment drop from event — 모험 드롭에는 랜덤 등급 부여
   if (result.equipDrop) {
     const drop = result.equipDrop;
     const def = EQUIPMENT_DEFS[drop.id];
@@ -426,12 +429,16 @@ function applyEventResult(char, gs, result, dayLogs) {
       const slot = def.slot;
       const current = char.equipment[slot];
       const currentTier = current ? (EQUIPMENT_DEFS[current.id]?.tier ?? -1) : -1;
+      // 등급 추첨 (모험 드롭은 항상 등급 있음)
+      const _grade = rollEquipGrade();
+      const dropWithGrade = { ...drop, grade: _grade.id, gradeMult: _grade.mult, gradeName: _grade.name };
       if (def.tier > currentTier) {
-        equipItem(char, drop, dayLogs);
+        equipItem(char, dropWithGrade, dayLogs);
       } else {
-        // 이미 좋은 장비 보유 → 인벤토리
-        char.inventory.push({ id: drop.id, name: def.name, icon: def.icon, qty: 1 });
-        dayLogs.push({ logClass: 'log-system', text: `🎁 ${char.name}이(가) ${def.icon} ${def.name}을(를) 획득했다. (인벤토리)` });
+        // 이미 좋은 장비 보유 → 인벤토리 (등급 정보 보존)
+        char.inventory.push({ id: drop.id, name: def.name, icon: def.icon, qty: 1, grade: _grade.id, gradeMult: _grade.mult, gradeName: _grade.name });
+        const _gradeTag = _grade.id !== 'common' ? ` [${_grade.name}]` : '';
+        dayLogs.push({ logClass: 'log-system', text: `🎁 ${char.name}이(가) ${def.icon} ${def.name}${_gradeTag}을(를) 획득했다. (인벤토리)` });
       }
     }
   }
@@ -751,6 +758,31 @@ function processMP(aliveChars, dayLogs) {
       const drain = 3 + Math.floor(Math.random() * 5);
       char.mp = Math.max(0, (char.mp || 0) - drain);
     }
+  }
+}
+
+// ─── MANA POTION AUTO-BUY ────────────────
+// MP가 부족한 캐릭터가 시장에서 마나 포션을 구매
+function processManaConsumables(aliveChars, gs, dayLogs) {
+  const manaItem = gs.market?.['mana_potion'];
+  if (!manaItem || manaItem.supplyIndex < 1) return;
+
+  for (const char of aliveChars) {
+    if (!char.class) continue;
+    const mpRatio = char.maxMp > 0 ? (char.mp || 0) / char.maxMp : 1;
+    if (mpRatio >= 0.35) continue; // MP 35% 이상이면 구매 불필요
+    if (Math.random() > 0.30) continue; // 하루 30% 확률로 시도
+
+    const buyPrice = manaItem.currentPrice || 60;
+    if (char.gold < buyPrice) continue;
+
+    char.gold -= buyPrice;
+    const mpRestore = Math.max(20, Math.floor(char.maxMp * 0.5));
+    char.mp = Math.min(char.maxMp, (char.mp || 0) + mpRestore);
+    manaItem.supplyIndex = Math.max(1, manaItem.supplyIndex - 1);
+    manaItem.demandIndex = Math.min(300, manaItem.demandIndex + 2);
+    gs.world.totalGoldCirculated = (gs.world.totalGoldCirculated || 0) + buyPrice;
+    dayLogs.push({ logClass: 'log-economy', text: `💙 ${char.name}이(가) 마나 포션을 구매했다. (${buyPrice}G, MP +${mpRestore})` });
   }
 }
 
@@ -1237,8 +1269,8 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
 
   // ── 연도별 최대 라운드 전투 ──
   const MAX_ROUNDS = _maxRounds;
-  // 침공 전체에서 스킬을 이미 사용한 캐릭터 추적 (한 침공당 스킬 1회 제한)
-  const usedSkillsThisInvasion = new Set();
+  // 침공 전체에서 스킬 사용 횟수 추적 (기본 1회, 스킬 레벨 4+ → 2회 가능)
+  const usedSkillsThisInvasion = new Map(); // char.id → 사용 횟수
   for (let round = 1; round <= MAX_ROUNDS && activeFighters.length > 0 && remainingEnemyHP > 0; round++) {
     dayLogs.push({ logClass: 'log-battle', text: `  ▶ ${round}라운드  [적 잔여: ${battleBar(remainingEnemyHP, enemyTotal)} ${Math.max(0, remainingEnemyHP)}/${enemyTotal}]` });
 
@@ -1248,7 +1280,9 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
     const _preUsedClasses = new Set();
     for (const c of activeFighters) {
       const sk = RAID_SKILL_TABLE[c.class];
-      if (!sk || _preUsedClasses.has(c.class) || usedSkillsThisInvasion.has(c.id)) continue;
+      if (!sk || _preUsedClasses.has(c.class)) continue;
+      const _maxUses = sk && (c.skillLevels?.[sk.name] || 1) >= 4 ? 2 : 1;
+      if ((usedSkillsThisInvasion.get(c.id) || 0) >= _maxUses) continue;
       _preUsedClasses.add(c.class);
       if (sk.buffAll && c.mp >= sk.mpCost) { buffAll += sk.buffAll; buffSources.push(`${c.name}(+${sk.buffAll})`); }
       if (sk.healAll && c.mp >= sk.mpCost) { healAll += sk.healAll; healSources.push(`${c.name}(+${Math.round(sk.healAll)})`); }
@@ -1272,23 +1306,27 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
 
       // ── 스킬/무기 결정 ──
       let sk, mpUsed = 0, actionLabel;
-      // 스킬 사용 가능 여부: MP 충분 + 이번 침공 미사용 + 이번 라운드 동일 클래스 미사용
+      // 침공 스킬 최대 사용 횟수 (스킬 레벨 4+ → 2회)
+      const _maxSkUses = classSk ? ((char.skillLevels?.[classSk.name] || 1) >= 4 ? 2 : 1) : 0;
+      const _curSkUses = usedSkillsThisInvasion.get(char.id) || 0;
+      // 스킬 사용 가능 여부: MP 충분 + 이번 침공 사용 횟수 미초과 + 이번 라운드 동일 클래스 미사용
       const canUseSkill = classSk && hasMp
-        && !usedSkillsThisInvasion.has(char.id)
+        && _curSkUses < _maxSkUses
         && !usedClassesThisRound.has(char.class);
       if (canUseSkill) {
-        // 직업 스킬 사용 (침공당 1회)
+        // 직업 스킬 사용 (침공당 기본 1회, 레벨 4+ 시 2회)
         sk = classSk;
         mpUsed = sk.mpCost;
         char.mp -= mpUsed;
-        usedSkillsThisInvasion.add(char.id);
+        usedSkillsThisInvasion.set(char.id, _curSkUses + 1);
         usedClassesThisRound.add(char.class);
-        actionLabel = `⚡MP -${mpUsed}(잔여:${char.mp})`;
+        const _useTxt = _maxSkUses >= 2 ? `(${_curSkUses + 1}/${_maxSkUses}회)` : '';
+        actionLabel = `⚡MP -${mpUsed}(잔여:${char.mp})${_useTxt}`;
       } else if (classSk) {
         // 직업 있지만 스킬 재사용 불가 (이미 사용 or MP부족 or 동료 선행) → 기본 타격
         const wpDef = char.equipment?.weapon ? EQUIPMENT_DEFS[char.equipment.weapon.id] : null;
         const wpBonus = wpDef ? (wpDef.bonus.str || 0) + (wpDef.bonus.int || 0) : 0;
-        const _dupReason = usedSkillsThisInvasion.has(char.id) ? '스킬 사용 완료'
+        const _dupReason = _curSkUses >= _maxSkUses ? '스킬 사용 완료'
           : usedClassesThisRound.has(char.class) ? '동료 선행 사용' : 'MP부족';
         sk = { name: char.equipment?.weapon?.name || '맨손', mpCost: 0, atkBonus: 4 + wpBonus, defRed: 0.0, evade: 0,
                flavor: ['필사적으로 버텼다', '쓰러지지 않겠다는 의지로 싸웠다', '직접 몸으로 막아냈다'] };
@@ -2605,15 +2643,37 @@ function processGuildQuests(gs, dayLogs) {
   // 가용 의뢰가 3개 미만이면 전체 풀에서 뽑기 (극초반 안전망)
   const pool = available.length >= 3 ? available : GUILD_QUEST_POOL;
 
-  // 무작위로 4개 (혹은 전부) 선택
+  // 무작위로 최대 3개 선택 (수급 의뢰 자리 확보)
   const shuffled = pool.slice().sort(() => Math.random() - 0.5);
-  const chosen = shuffled.slice(0, Math.min(4, shuffled.length));
+  const chosen = shuffled.slice(0, Math.min(3, shuffled.length)).map(q => ({
+    label: q.label, desc: q.desc, reward: q.reward, _questId: q.id,
+  }));
+
+  // 시장 공급 부족 아이템이 있으면 긴급 수급 의뢰를 4번째 선택지로 추가
+  const SUPPLY_CATS_GQ = new Set(['food', 'consumable', 'material', 'loot']);
+  const shortItems = Object.entries(gs.market || {})
+    .filter(([id, item]) => item.supplyIndex < 30 && SUPPLY_CATS_GQ.has(item.cat));
+  if (shortItems.length > 0) {
+    const [shortId, shortItem] = shortItems[Math.floor(Math.random() * shortItems.length)];
+    chosen.push({
+      label: `📦 [긴급] ${shortItem.name} 수급 의뢰`,
+      desc: `시장의 [${shortItem.name}] 재고가 위험 수준(${Math.floor(shortItem.supplyIndex)})입니다. 물자를 긴급 조달해주세요.`,
+      reward: `supply_${shortId}`,
+      _questId: `supply_${shortId}`,
+    });
+  } else {
+    // 수급 의뢰 없으면 4번째 정규 의뢰 추가
+    if (shuffled.length >= 4) {
+      const q = shuffled[3];
+      chosen.push({ label: q.label, desc: q.desc, reward: q.reward, _questId: q.id });
+    }
+  }
 
   gs.pendingChoices.push({
     type: 'guild_quest',
     title: '📋 길드 의뢰판',
     desc: '새로운 의뢰가 게시판에 올라왔습니다. 길드장으로서 방향을 정하세요.',
-    options: chosen.map(q => ({ label: q.label, desc: q.desc, reward: q.reward, _questId: q.id })),
+    options: chosen,
   });
   dayLogs.push({ logClass: 'log-system', text: `📋 길드 게시판에 새로운 의뢰가 올라왔다! 선택지를 확인하세요.` });
 }
@@ -2666,6 +2726,49 @@ function resolveGuildQuest(rewardType, gs, questId) {
       logs.push({ logClass: 'log-economy', text: `📦 물자 수송 완료. 금화 ${gold}G 획득, 시장 공급 안정.` });
       break;
     }
+    case 'explore': {
+      const exp = randInt(20, 40);
+      const gold = randInt(30, 80);
+      const char = pick(alive);
+      alive.forEach(c => { c.exp += exp; c.fatigue = Math.max(0, c.fatigue - 5); });
+      char.gold += gold;
+      logs.push({ logClass: 'log-party', text: `🗺 유적 탐사 완료! 전원 경험치 +${exp}, ${char.name}이(가) 유물 ${gold}G 획득. 팀 피로 -5.` });
+      break;
+    }
+    case 'rest': {
+      alive.forEach(c => {
+        c.fatigue = Math.max(0, c.fatigue - 20);
+        c.sanity = Math.min(100, c.sanity + 10);
+        c.hp = Math.min(c.maxHp, c.hp + randInt(10, 25));
+      });
+      logs.push({ logClass: 'log-party', text: `💤 내실 다지기. 전원 피로 -20, 이성 +10, HP 소량 회복.` });
+      break;
+    }
+    default: {
+      // 수급 의뢰: reward = 'supply_<itemId>'
+      if (typeof rewardType === 'string' && rewardType.startsWith('supply_')) {
+        const itemId = rewardType.slice(7);
+        const item = gs.market?.[itemId];
+        if (item && alive.length) {
+          const success = Math.random() < 0.65;
+          if (success) {
+            const supplyGain = randInt(40, 80);
+            item.supplyIndex = Math.min(200, item.supplyIndex + supplyGain);
+            const reward = randInt(80, 200);
+            const hero = pick(alive);
+            hero.gold += reward;
+            alive.forEach(c => { c.exp += 15; });
+            logs.push({ logClass: 'log-economy', text: `📦 [수급 의뢰] ${item.name} 조달 성공! 재고 +${supplyGain}, 보상 ${reward}G.` });
+          } else {
+            const partialGain = randInt(15, 30);
+            item.supplyIndex = Math.min(200, item.supplyIndex + partialGain);
+            alive.forEach(c => { c.hp = Math.max(1, c.hp - randInt(5, 15)); c.exp += 5; });
+            logs.push({ logClass: 'log-economy', text: `📦 [수급 의뢰] ${item.name} 조달 부분 성공. 재고 +${partialGain}, 소량 HP 손실.` });
+          }
+        }
+      }
+      break;
+    }
   }
   appendToLog(logs);
 }
@@ -2699,6 +2802,18 @@ function disbandParty(party, gs, dayLogs) {
 // EQUIPMENT SYSTEM
 // ═══════════════════════════════════════
 
+// ─── 모험 드롭 장비 등급 추첨 ──────────
+function rollEquipGrade() {
+  const grades = EQUIPMENT_GRADES;
+  const total = grades.reduce((s, g) => s + g.weight, 0);
+  let r = Math.random() * total;
+  for (const g of grades) {
+    r -= g.weight;
+    if (r <= 0) return g;
+  }
+  return grades[0];
+}
+
 // 장비 장착 — _equipBonuses에 누적, 기존 장비 해제 후 새 장비 적용
 function equipItem(char, item, dayLogs) {
   if (!item || !item.id) return;
@@ -2708,23 +2823,25 @@ function equipItem(char, item, dayLogs) {
 
   if (!char._equipBonuses) char._equipBonuses = { str:0, int:0, fai:0, agi:0, cha:0, end:0 };
 
-  // 기존 장비 보너스 제거
+  // 기존 장비 보너스 제거 (등급 배율 포함)
   const old = char.equipment[slot];
   if (old) {
     const oldDef = EQUIPMENT_DEFS[old.id];
+    const oldMult = old.gradeMult || 1.0;
     if (oldDef) {
       for (const [stat, bonus] of Object.entries(oldDef.bonus)) {
-        char._equipBonuses[stat] = (char._equipBonuses[stat] || 0) - bonus;
+        char._equipBonuses[stat] = (char._equipBonuses[stat] || 0) - Math.round(bonus * oldMult);
       }
     }
-    // 기존 장비 인벤토리로
-    char.inventory.push({ id: old.id, name: old.name, icon: old.icon, qty: 1 });
+    // 기존 장비 인벤토리로 (등급 정보 보존)
+    char.inventory.push({ id: old.id, name: old.name, icon: old.icon, qty: 1, grade: old.grade, gradeMult: old.gradeMult, gradeName: old.gradeName });
   }
 
-  // 새 장비 장착
-  char.equipment[slot] = { id: item.id, name: def.name, icon: def.icon, tier: def.tier };
+  // 새 장비 장착 (등급 배율 적용)
+  const gradeMult = item.gradeMult || 1.0;
+  char.equipment[slot] = { id: item.id, name: def.name, icon: def.icon, tier: def.tier, grade: item.grade, gradeMult: item.gradeMult, gradeName: item.gradeName };
   for (const [stat, bonus] of Object.entries(def.bonus)) {
-    char._equipBonuses[stat] = (char._equipBonuses[stat] || 0) + bonus;
+    char._equipBonuses[stat] = (char._equipBonuses[stat] || 0) + Math.round(bonus * gradeMult);
   }
 
   // maxHp 재계산 (end 보너스 반영)
@@ -2734,8 +2851,9 @@ function equipItem(char, item, dayLogs) {
   char.hp = Math.min(char.maxHp, char.hp);
 
   if (dayLogs) {
-    const bonusStr = Object.entries(def.bonus).map(([k,v]) => `${STAT_DEF[k]?.abbr||k}+${v}`).join(', ');
-    dayLogs.push({ logClass: 'log-system', text: `🛡 ${char.name}이(가) ${def.icon} ${def.name}을(를) 장착했다! (${bonusStr})` });
+    const gradeTag = item.gradeName && item.gradeName !== '일반' ? ` [${item.gradeName}]` : '';
+    const bonusStr = Object.entries(def.bonus).map(([k,v]) => `${STAT_DEF[k]?.abbr||k}+${Math.round(v * gradeMult)}`).join(', ');
+    dayLogs.push({ logClass: 'log-system', text: `🛡 ${char.name}이(가) ${def.icon} ${def.name}${gradeTag}을(를) 장착했다! (${bonusStr})` });
   }
 }
 
@@ -2985,9 +3103,9 @@ function processEquipmentPurchases(aliveChars, gs, dayLogs) {
       const current = char.equipment[slot];
       const currentTier = current ? (EQUIPMENT_DEFS[current.id]?.tier ?? -1) : -1;
 
-      // 다음 티어 장비 후보 (성향·직업 적합 우선)
+      // 다음 티어 장비 후보 — 시장 구매는 Tier 2 이하 (고급 장비는 모험·레어 오퍼에서만)
       const candidates = Object.entries(EQUIPMENT_DEFS)
-        .filter(([id, def]) => def.slot === slot && def.tier === currentTier + 1)
+        .filter(([id, def]) => def.slot === slot && def.tier === currentTier + 1 && def.tier <= 2)
         .sort((a, b) => a[1].price - b[1].price);
 
       if (!candidates.length) continue;
@@ -3295,18 +3413,18 @@ function applyClassPromotion(char, classId, gs) {
   }
 
   char.class = classId;
-  // 일반 스킬 3개 + 침공 스킬 1개를 동일하게 classSkills에 포함
+  // 일반 스킬 3개 + 침공 스킬 1개 — 모두 일반 스킬로 통합 (isRaid 구분 없음)
   const _invasionSk = RAID_SKILL_TABLE[classId];
   const _invasionSkObj = _invasionSk
-    ? { name: _invasionSk.name, mpCost: _invasionSk.mpCost, effect: _invasionSk.effect, isRaid: true }
+    ? { name: _invasionSk.name, mpCost: _invasionSk.mpCost, effect: _invasionSk.effect }
     : null;
   char.classSkills = [...classDef.skills, ...(_invasionSkObj ? [_invasionSkObj] : [])];
   for (const [stat, bonus] of Object.entries(classDef.statBonus || {})) {
     char.stats[stat] = (char.stats[stat] || 0) + bonus;
   }
-  if (classDef.mpActive) {
-    char.mp = char.maxMp;
-  }
+  // 전직 시 maxMp 재계산 후 MP 완전 충전 (모든 직업)
+  char.maxMp = 30 + (char.stats.int || 0) * 4 + Math.floor((char.stats.fai || 0) * 2);
+  char.mp = char.maxMp;
   char.maxHp = 50 + char.stats.str * 5 + char.stats.end * 3 + 10;
   char.hp = Math.min(char.hp + (isReclass ? 0 : 20), char.maxHp);
 }

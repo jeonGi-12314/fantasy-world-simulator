@@ -43,6 +43,16 @@ const EQUIPMENT_DEFS = {
   acc_bracer:     { name: '전사의 완갑',   slot: 'accessory', tier: 2, icon: '🔱', bonus: { str: 2, end: 1 },  price: 230, forge: true,  desc: 'STR +2, END +1. 전투를 위해 단련된 완갑.' },
 };
 
+// ─── EQUIPMENT GRADES ────────────────────
+// 모험 드롭 장비에 부여되는 등급 (시장 구매 장비는 등급 없음)
+const EQUIPMENT_GRADES = [
+  { id: 'common',    name: '일반',   color: '#9e9e9e', mult: 1.0,  weight: 50 },
+  { id: 'uncommon',  name: '우수',   color: '#4caf50', mult: 1.4,  weight: 28 },
+  { id: 'rare',      name: '희귀',   color: '#2196f3', mult: 2.0,  weight: 14 },
+  { id: 'epic',      name: '영웅',   color: '#9c27b0', mult: 2.8,  weight: 6  },
+  { id: 'legendary', name: '전설',   color: '#ff9800', mult: 4.0,  weight: 2  },
+];
+
 // ─── LEVEL SYSTEM ────────────────────────
 // expForNextLevel(level) → EXP needed to go from `level` to `level+1`
 // Level 1→2: 100, 2→3: 135, ..., each ~35% harder
@@ -111,7 +121,7 @@ const MARKET_EXTRA_ITEMS = {
   holy_water:       { name: '성수',           cat: 'consumable', base: 120, supply: 50, demand: 65,  unlock: { building: 'temple' } },
   divine_talisman:  { name: '신성 부적',      cat: 'consumable', base: 250, supply: 20, demand: 40,  unlock: { building: 'temple' } },
   quality_meal:     { name: '고급 식사',      cat: 'food',       base: 35,  supply: 80, demand: 100, unlock: { building: 'inn' } },
-  guild_contract:   { name: '길드 계약서',    cat: 'material',   base: 150, supply: 30, demand: 50,  unlock: { building: 'guild' } },
+  guild_contract:   { name: '길드 계약서',    cat: 'material',   base: 150, supply: 200, demand: 20,  unlock: { building: 'guild' } },
 };
 
 // ─── RARE MARKET EQUIPMENT (길드장 구매 선택지) ──
