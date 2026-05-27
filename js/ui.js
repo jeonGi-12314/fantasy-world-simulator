@@ -726,26 +726,75 @@ function buildRelationGraph(gs, selectedChar) {
     creditor: '#ff5722', debtor: '#ff7043', fan: '#03a9f4',
   };
 
-  const edges = [];
-  const seenPairs = new Set();
+  // 방향성 엣지 수집 (중복 제거 없이 A→B, B→A 각각)
+  const allEdges = [];
   for (const node of nodes) {
     for (const rel of node.char.relationships) {
-      const pairKey = [node.char.id, rel.targetId].sort().join('|');
-      if (seenPairs.has(pairKey)) continue;
-      seenPairs.add(pairKey);
       const toNode = nodes.find(n => n.char.id === rel.targetId);
       if (!toNode) continue;
-      edges.push({ from: node, to: toNode, rel });
+      allEdges.push({ from: node, to: toNode, rel });
     }
+  }
+
+  // 쌍 분류: 단방향 vs 양방향 (같은 타입 vs 다른 타입)
+  const pairMap = new Map();
+  for (const e of allEdges) {
+    const key = [e.from.char.id, e.to.char.id].sort().join('|');
+    if (!pairMap.has(key)) pairMap.set(key, []);
+    pairMap.get(key).push(e);
   }
 
   let svg = `<svg viewBox="0 0 ${size} ${size}" width="100%" style="display:block;max-width:${size}px;margin:auto">`;
 
-  for (const e of edges) {
-    const color = relColors[e.rel.type] || '#5a7aaa';
-    const op = e.rel.affection < 0 ? 0.35 : 0.65;
-    svg += `<line x1="${e.from.x.toFixed(0)}" y1="${e.from.y.toFixed(0)}" x2="${e.to.x.toFixed(0)}" y2="${e.to.y.toFixed(0)}" stroke="${color}" stroke-width="1.5" stroke-opacity="${op}"/>`;
+  // 화살표 그리기 헬퍼: 선 + 삼각형 화살촉 (노드 원을 피해 끝점 조정)
+  const drawArrow = (from, to, color, op, offset = 0) => {
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const ux = dx / len, uy = dy / len;   // 단위 방향
+    const px = -uy, py = ux;             // 수직 방향 (오프셋용)
+
+    const ox = px * offset, oy = py * offset;
+    const A = 5;                          // 화살촉 크기
+
+    const x1 = from.x + ux * nodeR + ox;
+    const y1 = from.y + uy * nodeR + oy;
+    // 화살촉 끝 (노드 원 경계)
+    const tipX = to.x - ux * nodeR + ox;
+    const tipY = to.y - uy * nodeR + oy;
+    // 선 끝 (화살촉 밑변)
+    const x2 = tipX - ux * A;
+    const y2 = tipY - uy * A;
+
+    // 화살촉 삼각형 꼭짓점
+    const ax1 = (x2 + px * A * 0.55).toFixed(1);
+    const ay1 = (y2 + py * A * 0.55).toFixed(1);
+    const ax2 = (x2 - px * A * 0.55).toFixed(1);
+    const ay2 = (y2 - py * A * 0.55).toFixed(1);
+
+    let out = `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="1.6" stroke-opacity="${op}"/>`;
+    out += `<polygon points="${tipX.toFixed(1)},${tipY.toFixed(1)} ${ax1},${ay1} ${ax2},${ay2}" fill="${color}" opacity="${op}"/>`;
+    return out;
+  };
+
+  for (const [, pairEdges] of pairMap) {
+    if (pairEdges.length === 1) {
+      // 단방향 화살표
+      const e = pairEdges[0];
+      const color = relColors[e.rel.type] || '#5a7aaa';
+      const op = e.rel.affection < 0 ? 0.30 : 0.65;
+      svg += drawArrow(e.from, e.to, color, op, 0);
+    } else {
+      // 양방향: 두 화살표를 5px씩 오프셋으로 분리
+      for (const e of pairEdges) {
+        const color = relColors[e.rel.type] || '#5a7aaa';
+        const op = e.rel.affection < 0 ? 0.30 : 0.65;
+        svg += drawArrow(e.from, e.to, color, op, 5);
+      }
+    }
   }
+
+  // edges 변수는 레전드용으로만 참조
+  const edges = allEdges;
 
   for (const { char, x, y } of nodes) {
     const isDead = char.isDead;
