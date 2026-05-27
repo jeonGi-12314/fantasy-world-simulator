@@ -1032,18 +1032,24 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
   for (let round = 1; round <= MAX_ROUNDS && activeFighters.length > 0 && remainingEnemyHP > 0; round++) {
     dayLogs.push({ logClass: 'log-battle', text: `  ▶ ${round}라운드  [적 잔여: ${battleBar(remainingEnemyHP, enemyTotal)} ${Math.max(0, remainingEnemyHP)}/${enemyTotal}]` });
 
-    // 버프/힐 선계산 (MP 보유 시에만)
+    // 버프/힐 선계산 (MP 보유 시에만, 클래스별 중복 적용 방지)
     let buffAll = 0, healAll = 0;
+    const buffSources = [], healSources = [];
+    const _preUsedClasses = new Set();
     for (const c of activeFighters) {
       const sk = RAID_SKILL_TABLE[c.class];
-      if (!sk) continue;
-      if (sk.buffAll && c.mp >= sk.mpCost) buffAll += sk.buffAll;
-      if (sk.healAll && c.mp >= sk.mpCost) healAll += sk.healAll;
+      if (!sk || _preUsedClasses.has(c.class)) continue; // 같은 클래스 중복 방지
+      _preUsedClasses.add(c.class);
+      if (sk.buffAll && c.mp >= sk.mpCost) { buffAll += sk.buffAll; buffSources.push(`${c.name}(+${sk.buffAll})`); }
+      if (sk.healAll && c.mp >= sk.mpCost) { healAll += sk.healAll; healSources.push(`${c.name}(+${Math.round(sk.healAll)})`); }
     }
 
-    // 버프/힐 라운드 공지
-    if (buffAll > 0) dayLogs.push({ logClass: 'log-battle', text: `    ♪ 아군 사기 고취! 전원 공격력 +${buffAll}` });
-    if (healAll > 0) dayLogs.push({ logClass: 'log-battle', text: `    ✨ 신성 치유 발동! 전원 HP +${Math.round(healAll)} 회복` });
+    // 버프/힐 라운드 공지 (시전자 표시)
+    if (buffAll > 0) dayLogs.push({ logClass: 'log-battle', text: `    ♪ 아군 사기 고취! 전원 공격력 +${buffAll}  [${buffSources.join(' · ')}]` });
+    if (healAll > 0) dayLogs.push({ logClass: 'log-battle', text: `    ✨ 신성 치유 발동! 전원 HP +${Math.round(healAll)} 회복  [${healSources.join(' · ')}]` });
+
+    // 이번 라운드 사용된 스킬 추적 (클래스별 중복 방지)
+    const usedSkillsThisRound = new Set();
 
     const nextFighters = [];
     for (const char of activeFighters) {
@@ -1056,19 +1062,22 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
 
       // ── 스킬/무기 결정 ──
       let sk, mpUsed = 0, actionLabel;
-      if (classSk && hasMp) {
+      // 같은 클래스 스킬은 라운드당 1회만 (중복 시 기본 공격으로 폴백)
+      if (classSk && hasMp && !usedSkillsThisRound.has(char.class)) {
         // 직업 스킬 사용
         sk = classSk;
         mpUsed = sk.mpCost;
         char.mp -= mpUsed;
+        usedSkillsThisRound.add(char.class);
         actionLabel = `⚡MP -${mpUsed}(잔여:${char.mp})`;
-      } else if (classSk && !hasMp) {
-        // 직업 있지만 MP 부족 → 기본 타격
+      } else if (classSk && (!hasMp || usedSkillsThisRound.has(char.class))) {
+        // 직업 있지만 MP 부족 or 이미 동일 클래스 스킬 사용됨 → 기본 타격
         const wpDef = char.equipment?.weapon ? EQUIPMENT_DEFS[char.equipment.weapon.id] : null;
         const wpBonus = wpDef ? (wpDef.bonus.str || 0) + (wpDef.bonus.int || 0) : 0;
+        const _dupReason = hasMp ? '동료 선행 사용' : 'MP부족';
         sk = { name: char.equipment?.weapon?.name || '맨손', mpCost: 0, atkBonus: 4 + wpBonus, defRed: 0.0, evade: 0,
-               flavor: ['MP가 소진됐지만 필사적으로 버텼다', '쓰러지지 않겠다는 의지로 싸웠다'] };
-        actionLabel = `MP부족 — ${char.equipment?.weapon?.name || '맨손'}으로 공격`;
+               flavor: ['필사적으로 버텼다', '쓰러지지 않겠다는 의지로 싸웠다', '직접 몸으로 막아냈다'] };
+        actionLabel = `${_dupReason} — ${char.equipment?.weapon?.name || '맨손'}으로 공격`;
       } else {
         // 직업 없음 → 장착 무기로 공격
         const wpItem = char.equipment?.weapon;
