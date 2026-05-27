@@ -32,10 +32,12 @@ function renderChoiceQueue(gs) {
     return;
   }
   const choice = gs.pendingChoices[0];
+  const isAnnounce = choice.type === 'guild_announce';
   queueEl.innerHTML = `
-    <div class="choice-pending-banner" onclick="openChoiceModal()">
-      ⚠ <strong>${choice.title || '선택 대기 중'}</strong>
-      <span style="margin-left:6px;font-size:11px;opacity:.8">클릭하여 선택하기 →</span>
+    <div class="choice-pending-banner${isAnnounce ? ' announce' : ''}" onclick="openChoiceModal()">
+      ${isAnnounce ? '📜' : '⚠'} <strong>${choice.title || '선택 대기 중'}</strong>
+      ${gs.pendingChoices.length > 1 ? `<span style="margin-left:4px;opacity:.7">(+${gs.pendingChoices.length-1})</span>` : ''}
+      <span style="margin-left:6px;font-size:11px;opacity:.8">클릭하여 결정하기 →</span>
     </div>
   `;
 }
@@ -46,39 +48,146 @@ function openChoiceModal() {
   const choice = gs.pendingChoices[0];
 
   const modal = document.getElementById('story-choice-modal');
-  document.querySelector('#story-choice-modal .modal-header h3').textContent = choice.title || '선택의 기로';
-  document.getElementById('story-choice-content').innerHTML = `<p>${choice.desc || ''}</p>`;
+  const isAnnounce = choice.type === 'guild_announce';
+  const isQuestScroll = choice.isQuestScroll;
+
+  const header = document.querySelector('#story-choice-modal .modal-header h3');
+  header.textContent = choice.title || '선택의 기로';
+  header.style.color = isAnnounce ? '#ffd54f' : isQuestScroll ? '#d4a853' : '';
+
+  // Format desc: replace \n with <br>
+  const descHtml = (choice.desc || '').replace(/\n/g, '<br>');
+  const content = document.getElementById('story-choice-content');
+  if (isQuestScroll) {
+    content.innerHTML = `<div class="quest-scroll-desc">${descHtml}</div>`;
+  } else if (isAnnounce) {
+    content.innerHTML = `<div class="announce-desc">${descHtml}</div>`;
+  } else {
+    content.innerHTML = `<p>${descHtml}</p>`;
+  }
 
   const btnContainer = document.getElementById('story-choice-buttons');
   btnContainer.innerHTML = '';
-  (choice.options || []).forEach((opt, i) => {
-    const btn = document.createElement('button');
-    btn.className = 'btn-choice';
-    btn.innerHTML = `<strong>${opt.label}</strong><br><small>${opt.desc}</small>`;
-    btn.addEventListener('click', () => {
-      resolveChoice(choice, opt.reward, gs);
-      gs.pendingChoices.shift();
-      modal.classList.add('hidden');
-      renderAll();
-      saveGame(gs);
+
+  if (isQuestScroll) {
+    // 양피지 스타일: 퀘스트 카드 그리드
+    btnContainer.className = 'quest-card-grid';
+    (choice.options || []).forEach((opt) => {
+      const gradeColor = { S: '#ff6d00', A: '#ab47bc', B: '#1976d2', C: '#388e3c', D: '#5a5a5a' };
+      const grade = opt.grade || 'C';
+      const card = document.createElement('div');
+      card.className = 'quest-card';
+      card.innerHTML = `
+        <div class="quest-card-header">
+          <span class="quest-grade-badge" style="background:${gradeColor[grade]||'#5a5a5a'}">등급 ${grade}</span>
+          <span class="quest-card-title">${opt.label}</span>
+        </div>
+        <div class="quest-card-body">${opt.desc || ''}</div>
+        <div class="quest-card-footer">
+          <button class="btn-quest-accept">✅ 수락</button>
+          <button class="btn-quest-reject">❌ 거절</button>
+        </div>
+      `;
+      card.querySelector('.btn-quest-accept').addEventListener('click', () => {
+        resolveChoice(choice, opt, gs);
+        gs.pendingChoices.shift();
+        btnContainer.className = 'story-choice-buttons';
+        modal.classList.add('hidden');
+        renderAll();
+        saveGame(gs);
+      });
+      card.querySelector('.btn-quest-reject').addEventListener('click', () => {
+        card.style.opacity = '0.4';
+        card.querySelectorAll('button').forEach(b => b.disabled = true);
+      });
+      btnContainer.appendChild(card);
     });
-    btnContainer.appendChild(btn);
-  });
+  } else {
+    btnContainer.className = 'story-choice-buttons';
+    (choice.options || []).forEach((opt) => {
+      const btn = document.createElement('button');
+      btn.className = `btn-choice${isAnnounce ? ' announce-choice' : ''}`;
+      btn.innerHTML = `<strong>${opt.label}</strong><br><small>${opt.desc}</small>`;
+      btn.addEventListener('click', () => {
+        resolveChoice(choice, opt, gs);
+        gs.pendingChoices.shift();
+        modal.classList.add('hidden');
+        renderAll();
+        saveGame(gs);
+      });
+      btnContainer.appendChild(btn);
+    });
+  }
 
   modal.classList.remove('hidden');
 }
 
-function resolveChoice(choice, reward, gs) {
+function resolveChoice(choice, opt, gs) {
+  // opt는 { label, desc, reward, _questId? } 객체 또는 하위 호환성을 위한 문자열
+  const reward = (typeof opt === 'object' && opt !== null) ? opt.reward : opt;
   if (choice.type === 'party_quest') {
     resolvePartyQuest(choice.partyId, reward, gs);
   } else if (choice.type === 'guild_quest') {
-    resolveGuildQuest(reward, gs);
+    resolveGuildQuest(reward, gs, opt._questId);
+  } else if (choice.type === 'guild_announce') {
+    resolveGuildAnnounce(reward, choice, gs);
+  } else if (choice.type === 'threat_crisis') {
+    resolveThreatCrisis(reward, gs);
+  } else if (choice.type === 'rare_market') {
+    resolveRareMarketOffer(reward, choice, gs);
   }
+}
+
+// ─── LOG COLORIZER ────────────────────────
+// 캐릭터 이름·수치 변화·이벤트 태그를 색상으로 구분
+function colorizeLog(text, gs) {
+  if (!text) return text;
+  // 이미 대화 스타일 HTML이 있으면 건드리지 않음
+  if (text.includes('dlg-name') || text.includes('dlg-line')) return text;
+
+  // 플레이스홀더 방식으로 순차 치환 (이중 치환 방지)
+  const T = '\x02', M = '\x03', E = '\x04'; // 시작·중간·끝 마커
+
+  // ★ [bracket 태그]는 맨 마지막에 처리 (숫자 마커와 중첩 방지)
+
+  // 1. 양수 변화 (+N, +NG) — 한 번에 처리해 이중 치환 방지
+  //    +24G → log-pos, +8 → log-pos  (G 포함 여부를 한 패스에서 결정)
+  text = text.replace(/\+(\d[\d,]*G?)/g, (full) => `${T}log-pos${M}${full}${E}`);
+
+  // 2. 음수 변화 (-N, -NG) — 숫자 앞 공백·괄호·콤마 필요
+  text = text.replace(/([\s(,])(-\d[\d,]*)G/g,  (_, p, n) => `${p}${T}log-neg${M}${n}G${E}`);
+  text = text.replace(/([\s(,])(-\d[\d,]*)\b/g,  (_, p, n) => `${p}${T}log-neg${M}${n}${E}`);
+
+  // 3. 골드 단독 수량 (NNG) — 아직 마커 처리 안 된 것만
+  text = text.replace(/(\d[\d,]+)G(?!\d|\x04)/g, (_, n) => `${T}log-gold${M}${n}G${E}`);
+
+  // 4. 캐릭터 이름 → 청록색 (마커 밖 텍스트에서만 치환)
+  if (gs?.characters?.length) {
+    const names = gs.characters
+      .map(c => c.name).filter(n => n?.length >= 2)
+      .sort((a, b) => b.length - a.length);
+    for (const name of names) {
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`(?<![\\x02-\\x04])${esc}`, 'g');
+      text = text.replace(re, `${T}log-name${M}${name}${E}`);
+    }
+  }
+
+  // 5. 마커 → 실제 HTML span 변환
+  text = text.replace(new RegExp(`${T}([^${M}]+)${M}([^${E}]*)${E}`, 'g'),
+    (_, cls, content) => `<span class="${cls}">${content}</span>`);
+
+  // 6. [bracket 태그] → 금색 — 마커→HTML 변환 후 마지막에 처리
+  //    이 시점엔 마커가 이미 <span>으로 바뀌었으므로 중첩 없이 안전
+  text = text.replace(/\[([^\]]{1,100})\]/g, (_, t) => `<span class="log-tag">[${t}]</span>`);
+
+  return text;
 }
 
 // ─── HEADER ──────────────────────────────
 function renderHeader(gs) {
-  document.getElementById('day-number').textContent = gs.day;
+  const dateInfo = getDayDate(gs.day);
+  document.getElementById('day-number').textContent = dateInfo.label;
 
   const threatLevel = gs.world.threatLevel;
   const fillEl = document.getElementById('threat-fill');
@@ -118,15 +227,25 @@ function renderCharacterList(gs) {
     return;
   }
 
-  for (const char of gs.characters) {
+  // Dead characters sorted to the bottom
+  const sorted = [...gs.characters].sort((a, b) => (a.isDead ? 1 : 0) - (b.isDead ? 1 : 0));
+  for (const char of sorted) {
     const card = buildCharCard(char, gs);
     container.appendChild(card);
   }
 }
 
+// 파티 색상 팔레트 (1~4번째 파티)
+const PARTY_COLORS = ['#42a5f5', '#ff8c42', '#66bb6a', '#ce93d8'];
+
 function buildCharCard(char, gs) {
+  // 파티 인덱스 계산 (gs.parties 순서 기준)
+  const partyIdx = char.currentPartyId ? gs.parties.findIndex(p => p.id === char.currentPartyId) : -1;
+  const partyColor = partyIdx >= 0 ? PARTY_COLORS[partyIdx % PARTY_COLORS.length] : null;
+
   const card = document.createElement('div');
   card.className = `char-card${char.isDead ? ' dead' : ''}${char.currentPartyId ? ' in-party' : ''}`;
+  if (partyColor) card.style.borderColor = partyColor;
   card.dataset.charId = char.id;
 
   const classDef = char.class ? CLASSES[char.class] : null;
@@ -147,24 +266,29 @@ function buildCharCard(char, gs) {
     ? `<span class="class-badge" style="background:${classColor(char.class)};color:white">${classDef.name}</span>`
     : '<span class="class-badge" style="background:var(--bg-tertiary);color:var(--text-muted)">무직</span>';
 
-  // Party badge
-  const partyBadge = char.currentPartyId
-    ? '<span class="party-badge">파티 중</span>'
-    : '';
+  // Party badge (색상 포함)
+  const partyBadge = char.currentPartyId && partyColor
+    ? `<span class="party-badge" style="background:${partyColor};color:#0d1117">파티 ${partyIdx + 1}</span>`
+    : char.currentPartyId ? '<span class="party-badge">파티 중</span>' : '';
 
   const hpPct = Math.max(0, (char.hp / char.maxHp) * 100);
   const fatiguePct = char.fatigue;
   const sanityPct = char.sanity;
   const mpPct = char.maxMp > 0 ? (char.mp / char.maxMp) * 100 : 0;
+  const charLevel = char.level || 1;
+  const expNeeded = expForNextLevel(charLevel);
+  const expPct = Math.min(100, ((char.exp || 0) / expNeeded) * 100);
+  const hasPendingSP = (char.statPoints || 0) > 0;
 
   const genderLabel = char.gender === 'male' ? '♂' : char.gender === 'female' ? '♀' : '⚧';
+  const genderColor = char.gender === 'male' ? '#64b5f6' : char.gender === 'female' ? '#f48fb1' : '#ce93d8';
 
   card.innerHTML = `
     ${partyBadge}
     <div class="char-card-header">
       <div class="char-class-icon">${char.isDead ? '💀' : icon}</div>
       <div class="char-name-block">
-        <div class="char-name">${char.name}</div>
+        <div class="char-name" style="color:${genderColor}">${char.name}</div>
         <div class="char-sub">
           <span class="alignment-dot" style="background:${alignDef?.color || '#aaa'}"></span>
           ${genderLabel} · ${char.mbti || '?'} · ${mbtiTrait.title || '모험가'}
@@ -172,7 +296,11 @@ function buildCharCard(char, gs) {
       </div>
       <div class="char-gold">💰 ${numFmt(char.gold)}G</div>
     </div>
-    <div style="margin:4px 0 2px">${classBadge}</div>
+    <div style="margin:4px 0 2px;display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+      ${classBadge}
+      <span class="level-badge">Lv.${charLevel}</span>
+      ${hasPendingSP ? `<span class="sp-alert-badge" title="스탯 포인트 ${char.statPoints}점 배분 필요">⬆${char.statPoints}SP</span>` : ''}
+    </div>
     <div class="stat-bar-row">
       <span class="stat-bar-label">HP</span>
       <div class="stat-bar-outer"><div class="stat-bar-inner hp" style="width:${hpPct}%"></div></div>
@@ -194,10 +322,15 @@ function buildCharCard(char, gs) {
       <div class="stat-bar-outer"><div class="stat-bar-inner sanity" style="width:${sanityPct}%"></div></div>
       <span class="stat-bar-val">${char.sanity}/100</span>
     </div>
+    <div class="stat-bar-row">
+      <span class="stat-bar-label" style="color:var(--exp-color,#9c6eff)">EXP</span>
+      <div class="stat-bar-outer"><div class="stat-bar-inner exp" style="width:${expPct}%"></div></div>
+      <span class="stat-bar-val" style="font-size:10px">${Math.floor(char.exp||0)}/${expNeeded}</span>
+    </div>
     <div class="stat-mini-row" style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
       ${Object.entries(char.stats).map(([k,v]) => `
         <div class="stat-chip" data-tooltip="${STAT_DEF[k]?.name}(${STAT_DEF[k]?.abbr}): ${v}/10&#10;${STAT_TOOLTIPS[k] || ''}" style="color:${STAT_COLORS[k]}">
-          ${STAT_DEF[k]?.abbr}${v}
+          ${STAT_DEF[k]?.abbr}/${v}
         </div>
       `).join('')}
     </div>
@@ -205,6 +338,22 @@ function buildCharCard(char, gs) {
     ${char.isDead ? '<button class="memorial-btn">🕯 추모</button>' : ''}
     ${char.isRetired ? '<div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px">🌅 은퇴</div>' : ''}
   `;
+
+  // Edit/Delete buttons (injected after innerHTML so stopPropagation works cleanly)
+  if (!char.isDead && !char.isRetired) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'char-edit-btn';
+    editBtn.title = '캐릭터 수정';
+    editBtn.textContent = '✏';
+    editBtn.addEventListener('click', e => { e.stopPropagation(); openCharEditModal(char.id); });
+    card.querySelector('.char-card-header').appendChild(editBtn);
+  }
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'char-delete-btn';
+  deleteBtn.title = '캐릭터 삭제';
+  deleteBtn.textContent = '🗑';
+  deleteBtn.addEventListener('click', e => { e.stopPropagation(); deleteChar(char.id); });
+  card.querySelector('.char-card-header').appendChild(deleteBtn);
 
   // Click to focus
   card.addEventListener('click', () => {
@@ -287,9 +436,31 @@ function renderMarketPanel(gs) {
     grouped[item.cat].push({ id, ...item });
   }
 
+  // 희귀 행상인 offer
+  let rareOfferHtml = '';
+  if (gs.world.rareOffer) {
+    const ro = gs.world.rareOffer;
+    const daysLeft = ro.expiresDay - gs.day;
+    const statsStr = Object.entries(ro.item.stats || {}).map(([k, v]) => `${k}+${v}`).join(' ');
+    rareOfferHtml = `
+      <div class="rare-offer-banner">
+        <div class="rare-offer-title">🌟 전설 행상인 등장!</div>
+        <div class="rare-offer-item">${ro.item.icon || '⚔'} <strong>${ro.item.name}</strong>
+          ${statsStr ? `<span class="rare-offer-stats">${statsStr}</span>` : ''}
+        </div>
+        <div class="rare-offer-meta">
+          <span class="rare-offer-price">${ro.item.price.toLocaleString()}G</span>
+          <span class="rare-offer-days">⏳ ${daysLeft}일 남음</span>
+        </div>
+        <div class="rare-offer-note">캐릭터가 조건 충족 시 자동으로 구매를 시도합니다.</div>
+      </div>
+    `;
+  }
+
   let html = `
     <div class="market-news">${marketNews || '📊 시장은 오늘도 활발하게 돌아가고 있다.'}</div>
     ${anomalies ? `<div class="market-anomaly">⚠ ${anomalies}</div>` : ''}
+    ${rareOfferHtml}
   `;
 
   for (const [cat, label] of Object.entries(categories)) {
@@ -297,8 +468,20 @@ function renderMarketPanel(gs) {
     html += `<div class="market-section-title">${label}</div>`;
     for (const item of grouped[cat]) {
       const priceDiff = item.currentPrice - item.prevPrice;
-      const changeClass = priceDiff > 0 ? 'up' : priceDiff < 0 ? 'down' : 'neutral';
-      const changeStr = priceDiff > 0 ? `▲${priceDiff}` : priceDiff < 0 ? `▼${Math.abs(priceDiff)}` : '—';
+      // 가격 변동 등급: 폭등/폭락/상승/하락/변동없음
+      let changeLabel, changeClass;
+      const absDiff = Math.abs(priceDiff);
+      const diffRatio = item.basePrice > 0 ? absDiff / item.basePrice : 0;
+      if (priceDiff > 0) {
+        changeClass = 'up';
+        changeLabel = diffRatio >= 0.15 ? `📈폭등 +${priceDiff}` : `▲상승 +${priceDiff}`;
+      } else if (priceDiff < 0) {
+        changeClass = 'down';
+        changeLabel = diffRatio >= 0.15 ? `📉폭락 -${absDiff}` : `▼하락 -${absDiff}`;
+      } else {
+        changeClass = 'neutral';
+        changeLabel = '—';
+      }
       const supplyPct = Math.min(100, (item.supplyIndex / 200) * 100);
       html += `
         <div class="market-item-row">
@@ -307,7 +490,7 @@ function renderMarketPanel(gs) {
             <div class="supply-bar-inner" style="width:${supplyPct}%;background:${supplyPct<20?'#f44336':supplyPct<50?'#ff9800':'#2196f3'}"></div>
           </div>
           <div class="market-item-price">${numFmt(item.currentPrice)}G</div>
-          <div class="market-item-change ${changeClass}">${changeStr}G</div>
+          <div class="market-item-change ${changeClass}" style="font-size:10px">${changeLabel}G</div>
         </div>
       `;
     }
@@ -329,10 +512,34 @@ function renderInventoryPanel(gs, selectedChar) {
       html += buildInventorySection(char, gs);
     }
     content.innerHTML = html || '<div class="inventory-empty">소지품이 없습니다.</div>';
-    return;
+  } else {
+    content.innerHTML = buildInventorySection(selectedChar, gs);
   }
 
-  content.innerHTML = buildInventorySection(selectedChar, gs);
+  // ── Stat allocation button handlers ──
+  content.querySelectorAll('.stat-alloc-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const charId = btn.dataset.char;
+      const stat   = btn.dataset.stat;
+      const c = gs.characters.find(x => x.id === charId);
+      if (!c || (c.statPoints || 0) <= 0 || (c.stats[stat] || 0) >= 10) return;
+      c.stats[stat]++;
+      c.statPoints--;
+      // Recalculate derived stats
+      if (stat === 'str' || stat === 'end') {
+        c.maxHp = 50 + c.stats.str * 5 + c.stats.end * 3;
+        c.hp = Math.min(c.hp, c.maxHp);
+      }
+      if (stat === 'int' || stat === 'fai') {
+        c.maxMp = 30 + c.stats.int * 4 + Math.floor((c.stats.fai || 0) * 2);
+        c.mp = Math.min(c.mp, c.maxMp);
+      }
+      renderInventoryPanel(gs, selectedChar);
+      renderAll();
+    });
+  });
+
 }
 
 function buildInventorySection(char, gs) {
@@ -355,13 +562,48 @@ function buildInventorySection(char, gs) {
       }).join('')
     : '';
 
+  const TIER_LABEL = ['일반', '고급', '희귀', '전설'];
   const inventoryHtml = char.inventory.length
-    ? char.inventory.map(it => `<div class="item-chip ${it.cat || ''}">${it.icon||''}${it.name} ×${it.qty || 1}</div>`).join('')
+    ? char.inventory.map(it => {
+        const def = EQUIPMENT_DEFS?.[it.id];
+        const tierBadge = def
+          ? `<span class="inv-tier-badge tier-${def.tier}">${TIER_LABEL[def.tier] || ''}</span>`
+          : '';
+        const qty = it.qty > 1 ? ` <span style="color:var(--text-muted)">×${it.qty}</span>` : '';
+        return `<div class="item-chip ${it.cat || ''}">${it.icon || ''}${it.name}${tierBadge}${qty}</div>`;
+      }).join('')
     : '<span class="text-muted" style="font-size:12px">인벤토리 비어 있음</span>';
 
+  // 전투 스킬 (침공 시 실제 사용 스킬)
+  const raidSk = typeof RAID_SKILL_TABLE !== 'undefined' && char.class ? RAID_SKILL_TABLE[char.class] : null;
+  const raidSkHtml = raidSk
+    ? `<div class="skill-level-chip raid-skill-chip" title="${raidSk.effect}" style="width:100%;max-width:none;background:rgba(255,23,68,0.10);border-color:#ff1744;color:#ff8a80">
+         ⚔ 침공 스킬: <strong>${raidSk.name}</strong>  MP -${raidSk.mpCost}
+         <br><span style="font-size:10px;opacity:0.85">${raidSk.effect}</span>
+       </div>`
+    : '';
+
+  // 일반 스킬 + 레벨 표시
   const skillsHtml = char.classSkills.length
-    ? char.classSkills.map(s => `<span class="skill-badge">${s}</span>`).join('')
+    ? char.classSkills.map(s => {
+        const lvl = (char.skillLevels || {})[s] || 1;
+        const stars = '★'.repeat(lvl) + '☆'.repeat(5 - lvl);
+        return `<div class="skill-level-chip" title="${s} Lv.${lvl} — 레벨 ${lvl}/5"><span class="skill-chip-name">${s}</span><span class="skill-chip-stars">${stars}</span></div>`;
+      }).join('')
     : '<span class="text-muted" style="font-size:12px">스킬 없음</span>';
+
+  // 스탯 포인트 배분 UI
+  const sp = char.statPoints || 0;
+  const statAllocHtml = sp > 0
+    ? `<div class="sp-alloc-header">⬆ 스탯 포인트 <span class="sp-count">${sp}</span>점 배분</div>
+       <div class="sp-alloc-row">
+         ${Object.keys(char.stats).map(k => `
+           <button class="stat-alloc-btn" data-char="${char.id}" data-stat="${k}" ${char.stats[k] >= 10 ? 'disabled' : ''}>
+             ${STAT_DEF[k]?.icon || ''} ${STAT_DEF[k]?.abbr || k}
+           </button>
+         `).join('')}
+       </div>`
+    : '';
 
   // 장비 보너스 합산 표시
   const equip = char._equipBonuses || {};
@@ -374,14 +616,20 @@ function buildInventorySection(char, gs) {
         ${classDef?.icon || '🧑'} ${char.name} ${classDef ? `(${classDef.name})` : '(무직)'}
         <span style="float:right;color:var(--gold);font-weight:700">${numFmt(char.gold)}G</span>
       </div>
+      <div style="font-size:11px;color:var(--exp-color,#9c6eff);margin-bottom:4px">
+        Lv.${char.level || 1} · EXP ${Math.floor(char.exp || 0)} / ${expForNextLevel(char.level || 1)}
+        ${(char.statPoints || 0) > 0 ? `<span style="color:var(--warning);font-weight:700;margin-left:6px">⬆ SP +${char.statPoints}</span>` : ''}
+      </div>
       ${bonusSummary ? `<div style="font-size:11px;color:var(--success);margin-bottom:4px">⬆ 장비 보너스: ${bonusSummary}</div>` : ''}
       <div style="margin:4px 0;font-size:11px;color:var(--text-muted)">장착</div>
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${equipmentHtml}</div>
       ${debtHtml ? `<div style="margin:4px 0;font-size:11px;color:var(--danger)">채무</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${debtHtml}</div>` : ''}
       <div style="margin:4px 0;font-size:11px;color:var(--text-muted)">소지품</div>
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${inventoryHtml}</div>
+      ${statAllocHtml}
       <div style="margin:4px 0;font-size:11px;color:var(--text-muted)">스킬</div>
-      <div style="display:flex;flex-wrap:wrap;gap:4px">${skillsHtml}</div>
+      ${raidSkHtml}
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">${skillsHtml}</div>
       <div style="margin-top:8px;font-size:11px;color:var(--text-muted)">행동 기록</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">
         전투:${char.actionCounts.combat||0} · 마법:${char.actionCounts.magic||0} · 신성:${char.actionCounts.faith||0} · 잠입:${char.actionCounts.stealth||0} · 사교:${char.actionCounts.social||0} · 생존:${char.actionCounts.survival||0} · 교역:${char.actionCounts.trade||0}
@@ -442,7 +690,7 @@ function renderRelationsPanel(gs, selectedChar) {
           <div class="affection-bar">
             <div class="affection-fill ${isNeg ? 'neg' : ''}" style="width:${affPct}%"></div>
           </div>
-          <div class="affection-val">${rel.affection}</div>
+          <div class="affection-val">${Math.round(rel.affection)}</div>
         </div>
       `;
     }
@@ -569,28 +817,56 @@ function renderBasePanel(gs) {
 
   const availBuildings = Object.entries(BUILDINGS).filter(([id]) => !gs.world.buildings[id]);
   if (availBuildings.length > 0) {
-    html += `<div class="market-section-title">🔨 건설 가능 시설</div>`;
-    for (const [bId, bDef] of availBuildings) {
-      const canSlot = builtIds.length < maxB;
-      const costHtml = Object.entries(bDef.cost).map(([k, v]) => {
-        const name = k === 'gold' ? '금화' : (MARKET_ITEMS[k]?.name || k);
-        const have = k === 'gold' ? gs.world.townGold : (gs.world.baseResources[k] || 0);
-        return `<span style="color:${have >= v ? 'var(--success)' : 'var(--danger)'}">${name}×${v}(${have})</span>`;
-      }).join(' ');
-      const canAfford = Object.entries(bDef.cost).every(([k, v]) =>
-        (k === 'gold' ? gs.world.townGold : (gs.world.baseResources[k] || 0)) >= v
-      );
-      const enabled = canSlot && canAfford;
-      html += `
-        <div class="building-card">
-          <div class="building-card-header">
-            <span class="building-icon">${bDef.icon}</span>
-            <span class="building-name">${bDef.name}</span>
-            <button class="btn-small${enabled ? '' : ' disabled-btn'}" onclick="${enabled ? `tryBuildBuilding('${bId}')` : ''}">건설</button>
-          </div>
-          <div class="building-desc">${bDef.desc}</div>
-          <div class="building-cost">필요: ${costHtml}</div>
-        </div>`;
+    // 현재 레벨에서 건설 가능한 것과 잠긴 것 분리
+    const unlockedBuildings = availBuildings.filter(([, d]) => (d.minBaseLevel || 1) <= gs.world.baseLevel);
+    const lockedBuildings   = availBuildings.filter(([, d]) => (d.minBaseLevel || 1) >  gs.world.baseLevel);
+
+    if (unlockedBuildings.length > 0) {
+      html += `<div class="market-section-title">🔨 건설 가능 시설</div>`;
+      for (const [bId, bDef] of unlockedBuildings) {
+        const canSlot = builtIds.length < maxB;
+        // 거점 레벨에 따른 효과 배율 표시
+        const lvAbove = gs.world.baseLevel - (bDef.minBaseLevel || 1);
+        const scalePct = bDef.effectScale ? Math.round(lvAbove * bDef.effectScale * 100) : 0;
+        const scaleNote = scalePct > 0 ? ` <span style="color:var(--success);font-size:11px">(거점 보너스 +${scalePct}%)</span>` : '';
+
+        const costHtml = Object.entries(bDef.cost).map(([k, v]) => {
+          const name = k === 'gold' ? '금화' : (MARKET_ITEMS[k]?.name || k);
+          const have = k === 'gold' ? gs.world.townGold : (gs.world.baseResources[k] || 0);
+          return `<span style="color:${have >= v ? 'var(--success)' : 'var(--danger)'}">${name}×${v}(${have})</span>`;
+        }).join(' ');
+        const canAfford = Object.entries(bDef.cost).every(([k, v]) =>
+          (k === 'gold' ? gs.world.townGold : (gs.world.baseResources[k] || 0)) >= v
+        );
+        const enabled = canSlot && canAfford;
+        html += `
+          <div class="building-card">
+            <div class="building-card-header">
+              <span class="building-icon">${bDef.icon}</span>
+              <span class="building-name">${bDef.name}</span>
+              <button class="btn-small${enabled ? '' : ' disabled-btn'}" onclick="${enabled ? `tryBuildBuilding('${bId}')` : ''}">건설</button>
+            </div>
+            <div class="building-desc">${bDef.desc}${scaleNote}</div>
+            <div class="building-cost">필요: ${costHtml}</div>
+          </div>`;
+      }
+    }
+
+    if (lockedBuildings.length > 0) {
+      const STAGE_NAMES = ['야영지', '마을', '성채', '왕도'];
+      html += `<div class="market-section-title" style="color:var(--text-muted)">🔒 해금 필요 시설</div>`;
+      for (const [bId, bDef] of lockedBuildings) {
+        const reqStage = STAGE_NAMES[(bDef.minBaseLevel || 1) - 1] || `Lv.${bDef.minBaseLevel}`;
+        html += `
+          <div class="building-card" style="opacity:0.45;pointer-events:none">
+            <div class="building-card-header">
+              <span class="building-icon">${bDef.icon}</span>
+              <span class="building-name">${bDef.name}</span>
+              <span class="btn-small disabled-btn" style="font-size:11px">🔒 ${reqStage}</span>
+            </div>
+            <div class="building-desc">${bDef.desc}</div>
+          </div>`;
+      }
     }
   }
 
@@ -614,6 +890,14 @@ function tryBuildBuilding(bId) {
   const bDef = BUILDINGS[bId];
   if (!bDef) return;
   if (!gs.world.buildings) gs.world.buildings = {};
+
+  // 거점 레벨 잠금 확인
+  const minLvl = bDef.minBaseLevel || 1;
+  if (gs.world.baseLevel < minLvl) {
+    const STAGE_NAMES = ['야영지', '마을', '성채', '왕도'];
+    showToast(`거점을 ${STAGE_NAMES[minLvl - 1]}(Lv.${minLvl})으로 업그레이드해야 건설 가능합니다.`, 'warning');
+    return;
+  }
 
   const stage = BASE_STAGES[gs.world.baseLevel - 1];
   const builtCount = Object.values(gs.world.buildings).filter(Boolean).length;
@@ -713,7 +997,7 @@ const SETTINGS_DEF = {
     { key: 'allowHeteroCouple', name: '이성 커플 허용', desc: '이성 연애 이벤트 활성화' },
     { key: 'pureMode', name: '순애 모드', desc: '양다리/바람 이벤트 제거' },
     { key: 'friendshipMode', name: '우정 모드', desc: '연애 이벤트 전체 제거' },
-    { key: 'oathBondSystem', name: '맹약 시스템', desc: 'Oath Bond 이벤트 활성화' },
+    { key: 'oathBondSystem', name: '맹약 시스템', desc: '결혼 + 높은 호감도(80+) 커플에게 "맹약(Oath Bond)"이 발동됩니다. 맹약을 맺은 두 사람은 위기 상황(HP 25% 이하 습격)에 처했을 때 상대방이 자동으로 달려와 HP를 분담합니다. 결혼 이벤트 이후 관계 패널에 🔮 아이콘으로 확인 가능합니다.' },
     { key: 'economicRelations', name: '경제적 관계', desc: '고용·채무 관계 이벤트 활성화' },
   ],
   gameplay: [
@@ -722,6 +1006,7 @@ const SETTINGS_DEF = {
     { key: 'characterInteraction', name: '캐릭터 상호작용', desc: '캐릭터 간 상호작용 이벤트' },
     { key: 'autoClassPromotion', name: '전직 자동 제안', desc: '조건 달성 시 전직 제안 팝업' },
     { key: 'autoStatDistribution', name: '스탯 자동 배분', desc: 'ON 시 스탯 자동 배분' },
+    { key: 'autoRecruitment', name: '자동 영입', desc: '평균 30일마다 랜덤 모험가가 길드에 합류' },
   ],
   economy: [
     { key: 'marketPriceFluctuation', name: '시장 가격 변동', desc: '수요·공급에 따른 가격 자동 변동' },
@@ -734,6 +1019,20 @@ const SETTINGS_DEF = {
     { key: 'showThreatLevel', name: '세계 위협도 표시', desc: '헤더 게이지 표시' },
     { key: 'showEventNumbers', name: '이벤트 수치 표시', desc: '이벤트 발생 시 수치 변화 표시' },
     { key: 'developerMode', name: '개발자 모드', desc: '수치 직접 조작, 이벤트 강제 발동' },
+    { key: 'nextEventMode', name: '⚡ Next Event 정지 기준', type: 'select', desc: '자동 진행 시 어떤 시점에 멈출지 결정합니다.',
+      options: [
+        { value: 'choice', label: '선택지 (기본) — 플레이어 선택지·사망·전직 발생 시 정지' },
+        { value: 'important', label: '중요 이벤트 — 위 + 연인·결혼·이별·특수·핑크 이벤트 시 정지' },
+      ],
+    },
+    { key: 'battleLogSpeed', name: '⚔ 전투 로그 속도 (ms/줄)', type: 'select', desc: '침공 시 전투 로그 한 줄이 등장하는 간격',
+      options: [
+        { value: 0,    label: '즉시 — 전체 동시 표시' },
+        { value: 400,  label: '빠름 — 0.4초/줄' },
+        { value: 800,  label: '보통 (기본) — 0.8초/줄' },
+        { value: 1500, label: '느림 — 1.5초/줄' },
+      ],
+    },
   ],
   manage: null, // special
 };
@@ -778,6 +1077,20 @@ function renderSettingsContent(tab) {
             <div class="setting-desc">${def.desc}</div>
           </div>
           <input type="number" class="setting-number-input" data-key="${def.key}" value="${val}" min="${def.min}" max="${def.max}">
+        </div>
+      `;
+    } else if (def.type === 'select') {
+      // eslint-disable-next-line eqeqeq
+      const optHtml = (def.options || []).map(o =>
+        `<option value="${o.value}" ${val == o.value ? 'selected' : ''}>${o.label}</option>`
+      ).join('');
+      html += `
+        <div class="setting-row setting-row-select">
+          <div class="setting-info">
+            <div class="setting-name">${def.name}</div>
+            <div class="setting-desc">${def.desc}</div>
+          </div>
+          <select class="setting-select-input" data-key="${def.key}">${optHtml}</select>
         </div>
       `;
     } else {
@@ -828,6 +1141,48 @@ function bindManageButtons() {
     renderAll(); showToast('자재 전부 +100', 'success');
   });
 }
+
+// ─── SMART TOOLTIP POSITIONING ───────────
+// Prevents tooltips from going behind the log area / top of screen.
+// On mouseover we measure the element position and set CSS custom props
+// which the ::after pseudo-element reads via var().
+(function initSmartTooltips() {
+  document.addEventListener('mouseover', (e) => {
+    const el = e.target.closest('[data-tooltip]');
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const viewH = window.innerHeight;
+    const viewW = window.innerWidth;
+    // Flip below if element is in upper 40% of viewport (tooltip would go above screen)
+    const goBelow = rect.top < viewH * 0.40;
+    if (goBelow) {
+      el.style.setProperty('--tt-top', '100%');
+      el.style.setProperty('--tt-bottom', 'auto');
+      el.style.setProperty('--tt-mt', '6px');
+      el.style.setProperty('--tt-mb', '0');
+    } else {
+      el.style.setProperty('--tt-top', 'auto');
+      el.style.setProperty('--tt-bottom', '100%');
+      el.style.setProperty('--tt-mt', '0');
+      el.style.setProperty('--tt-mb', '6px');
+    }
+    // Horizontal: keep within viewport
+    const ttW = Math.min(240, 200);
+    const elCX  = rect.left + rect.width / 2;
+    let leftPct = '50%';
+    let translateX = '-50%';
+    if (elCX - ttW / 2 < 8) {
+      leftPct = '0%'; translateX = '0%';
+    } else if (elCX + ttW / 2 > viewW - 8) {
+      leftPct = 'auto'; translateX = '0%';
+      el.style.setProperty('--tt-right', '0px');
+    } else {
+      el.style.removeProperty('--tt-right');
+    }
+    el.style.setProperty('--tt-left', leftPct);
+    el.style.setProperty('--tt-tx', translateX);
+  });
+})();
 
 // ─── NUMBER FORMAT ───────────────────────
 function numFmt(n) {

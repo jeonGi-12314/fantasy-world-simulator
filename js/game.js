@@ -3224,9 +3224,18 @@ function processBuildings(gs, dayLogs) {
   const alive = gs.characters.filter(c => !c.isDead && !c.isRetired);
   const speed = gs.settings?.storySpeed || 1;
 
+  // 거점 레벨에 따른 건물 효과 배율 계산 (effectScale per level above minBaseLevel)
+  const getBldScale = (bId) => {
+    const def = BUILDINGS?.[bId];
+    if (!def || !def.effectScale) return 1.0;
+    const lvAbove = Math.max(0, (gs.world.baseLevel || 1) - (def.minBaseLevel || 1));
+    return 1.0 + lvAbove * def.effectScale;
+  };
+
   // Watchtower: global passive (no cost, survey effect)
   if (gs.world.buildings.watchtower) {
-    gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 0.3);
+    const wScale = getBldScale('watchtower');
+    gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 0.3 * wScale);
   }
 
   // 저체력 캐릭터는 인벤토리 포션 자동 사용
@@ -3270,8 +3279,9 @@ function processBuildings(gs, dayLogs) {
           if (char.gold < cost) break;
           char.gold -= cost;
           gs.world.townGold = (gs.world.townGold || 0) + cost;
-          char.hp = Math.min(char.maxHp, char.hp + 15);
-          char.fatigue = Math.max(0, char.fatigue - 20);
+          const innScale = getBldScale('inn');
+          char.hp = Math.min(char.maxHp, char.hp + Math.round(15 * innScale));
+          char.fatigue = Math.max(0, char.fatigue - Math.round(20 * innScale));
           break;
         }
         case 'temple': {
@@ -3279,7 +3289,8 @@ function processBuildings(gs, dayLogs) {
           if (char.gold < cost) break;
           char.gold -= cost;
           gs.world.townGold = (gs.world.townGold || 0) + cost;
-          char.sanity = Math.min(100, char.sanity + 5);
+          const templeScale = getBldScale('temple');
+          char.sanity = Math.min(100, char.sanity + Math.round(5 * templeScale));
           for (const status of ['curse', 'poison', 'fear']) {
             if (char.statusEffects.includes(status) && Math.random() < 0.3) {
               char.statusEffects.splice(char.statusEffects.indexOf(status), 1);
@@ -3294,8 +3305,9 @@ function processBuildings(gs, dayLogs) {
           char.gold -= cost;
           gs.world.townGold = (gs.world.townGold || 0) + cost;
           if (!char._statAccum) char._statAccum = {};
-          char._statAccum.str = (char._statAccum.str || 0) + 0.12 * speed;
-          char._statAccum.end = (char._statAccum.end || 0) + 0.08 * speed;
+          const tgScale = getBldScale('training_ground');
+          char._statAccum.str = (char._statAccum.str || 0) + 0.12 * speed * tgScale;
+          char._statAccum.end = (char._statAccum.end || 0) + 0.08 * speed * tgScale;
           char.fatigue = Math.min(100, char.fatigue + 5);
           char.actionCounts.combat = (char.actionCounts.combat || 0) + 1;
           break;
@@ -3306,13 +3318,15 @@ function processBuildings(gs, dayLogs) {
           char.gold -= cost;
           gs.world.townGold = (gs.world.townGold || 0) + cost;
           if (!char._statAccum) char._statAccum = {};
-          char._statAccum.int = (char._statAccum.int || 0) + 0.12 * speed;
-          char.exp += Math.round(2 * speed);
+          const libScale = getBldScale('library');
+          char._statAccum.int = (char._statAccum.int || 0) + 0.12 * speed * libScale;
+          char.exp += Math.round(2 * speed * libScale);
           char.actionCounts.magic = (char.actionCounts.magic || 0) + 1;
           break;
         }
         case 'guild': {
-          const income = Math.round((15 + randInt(0, 10)) * speed);
+          const guildScale = getBldScale('guild');
+          const income = Math.round((15 + randInt(0, 10)) * speed * guildScale);
           char.gold += income;
           gs.world.totalGoldCirculated += income;
           char.exp += Math.round(2 * speed);
