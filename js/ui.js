@@ -76,8 +76,8 @@ function openChoiceModal() {
     btnContainer.className = 'quest-card-grid';
     (choice.options || []).forEach((opt) => {
       const gradeColor = { S: '#ff6d00', A: '#ab47bc', B: '#1976d2', C: '#388e3c', D: '#5a5a5a' };
-      const gradeSuccessLabel = { S: '성공률 낮음 ★★★★★', A: '성공률 보통 ★★★★☆', B: '성공률 양호 ★★★☆☆', C: '성공률 높음 ★★☆☆☆', D: '성공률 최고 ★☆☆☆☆' };
-      const gradePenaltyLabel = { S: '실패 패널티: 치명적', A: '실패 패널티: 심각', B: '실패 패널티: 보통', C: '실패 패널티: 경미', D: '실패 패널티: 없음' };
+      const gradeSuccessLabel = { S: '성공률 ~18%  실패위험 ████████░░', A: '성공률 ~35%  실패위험 ██████░░░░', B: '성공률 ~55%  실패위험 ████░░░░░░', C: '성공률 ~70%  실패위험 ██░░░░░░░░', D: '성공률 ~95%  실패위험 ░░░░░░░░░░' };
+      const gradePenaltyLabel = { S: '실패 시: 전원 중상·골드 손실 (치명)', A: '실패 시: 부상·골드 손실 (심각)', B: '실패 시: 경미한 부상·손실', C: '실패 시: 소량 피로·손실', D: '실패 시: 피로만 증가 (경미)' };
       const grade = opt.grade || 'C';
       const card = document.createElement('div');
       card.className = 'quest-card';
@@ -107,6 +107,19 @@ function openChoiceModal() {
       card.querySelector('.btn-quest-reject').addEventListener('click', () => {
         card.style.opacity = '0.4';
         card.querySelectorAll('button').forEach(b => b.disabled = true);
+        // 모든 카드가 거절됐으면 자동으로 '휴식' 처리 (선택지 블록 방지)
+        const allCards = btnContainer.querySelectorAll('.quest-card');
+        const rejectedCards = btnContainer.querySelectorAll('.quest-card button:disabled');
+        const totalButtons = btnContainer.querySelectorAll('.quest-card .btn-quest-accept').length;
+        const rejectedCount = btnContainer.querySelectorAll('.quest-card .btn-quest-accept:disabled').length;
+        if (rejectedCount >= totalButtons) {
+          resolveChoice(choice, { label: '모두 거절 — 휴식', reward: 'rest', grade: 'D' }, gs);
+          gs.pendingChoices.shift();
+          btnContainer.className = 'story-choice-buttons';
+          modal.classList.add('hidden');
+          renderAll();
+          saveGame(gs);
+        }
       });
       btnContainer.appendChild(card);
     });
@@ -1104,13 +1117,18 @@ function showToast(message, type = 'info') {
 // ─── ENDING MODAL ────────────────────────
 function showEnding(ending) {
   const modal = document.getElementById('ending-modal');
+  const gs = window.GS;
   document.getElementById('ending-title').textContent = ending.name;
+  const d = typeof getDayDate === 'function' ? getDayDate(gs.day) : null;
+  const dateLabel = d ? `${d.year}년차 ${d.season} ${d.dayInSeason}일 (Day ${gs.day})` : `Day ${gs.day}`;
+  const totalChars = gs.characters.length;
+  const deadChars = gs.characters.filter(c => c.isDead).length;
   document.getElementById('ending-content').innerHTML = `
     <div class="ending-content">
       <div class="ending-icon">${ending.icon}</div>
       <div class="ending-name">${ending.name}</div>
       <div class="ending-desc">${ending.desc}</div>
-      <div class="ending-stats">Day ${window.GS.day} · 캐릭터 ${window.GS.characters.length}명</div>
+      <div class="ending-stats">${dateLabel} · 전사 ${deadChars}/${totalChars}명</div>
     </div>
   `;
   modal.classList.remove('hidden');

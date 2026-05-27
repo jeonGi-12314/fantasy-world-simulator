@@ -177,10 +177,10 @@ async function nextDay() {
       }
     }
 
-    // 12. Stat growth clamp
+    // 12. Stat growth clamp (스탯 하한만 적용 — 시뮬레이션 중 상한 없음, 초기 생성만 10 이하)
     for (const char of aliveChars) {
       for (const stat of Object.keys(char.stats)) {
-        char.stats[stat] = Math.max(0, Math.min(10, char.stats[stat]));
+        char.stats[stat] = Math.max(0, char.stats[stat]);
       }
       char.hp = Math.min(char.maxHp, Math.max(0, char.hp));
       char.mp = Math.min(char.maxMp, Math.max(0, char.mp));
@@ -224,14 +224,10 @@ async function nextDay() {
       setTimeout(() => showNextPromotion(), 500);
     }
 
-    // 18. Ending — 파티 전멸·마왕 처치만 모달 출력, 나머지는 로그만
+    // 18. Ending — 전멸 시 항상 엔딩 모달 표시
     if (ending && !gs.endingsAchieved.includes(ending.id)) {
       gs.endingsAchieved.push(ending.id);
-      if (ending.id === 'darkness_consumed' || ending.id === 'hero_return') {
-        setTimeout(() => showEnding(ending), 1000);
-      } else {
-        appendToLog([{ logClass: 'log-world', text: `🏆 ${ending.icon} [${ending.name}] 달성! ${ending.desc}` }]);
-      }
+      setTimeout(() => showEnding(ending), 1000);
     }
   } catch (err) {
     console.error('[nextDay error]', err);
@@ -382,7 +378,7 @@ function applyEventResult(char, gs, result, dayLogs) {
       if (!char._statAccum) char._statAccum = {};
       char._statAccum[stat] = (char._statAccum[stat] || 0) + delta * speed;
       if (char._statAccum[stat] >= 1.0) {
-        char.stats[stat] = Math.min(10, (char.stats[stat] || 0) + 1);
+        char.stats[stat] = (char.stats[stat] || 0) + 1;
         char._statAccum[stat] -= 1.0;
         dayLogs.push({ logClass: 'log-class', text: `📈 ${char.name}의 ${STAT_DEF[stat].name}(${STAT_DEF[stat].abbr}) 스탯이 성장했다!` });
         // Update maxHp if str/end grew
@@ -528,17 +524,18 @@ function checkLevelUp(char, gs, dayLogs) {
 function autoDistributeStats(char, points) {
   const mbtiTrait = MBTI_TRAITS[char.mbti] || {};
   const mods = mbtiTrait.eventMod || { str: 0.1 };
-  // Sort stats by MBTI preference descending
+  // Sort stats by MBTI preference descending (상한 없음 — 시뮬레이션 중 무한 성장 가능)
   const sorted = Object.entries(mods).sort((a, b) => b[1] - a[1]);
+  const allStats = Object.keys(char.stats);
   for (let i = 0; i < points; i++) {
-    const pick = sorted.find(([k]) => char.stats[k] < 10);
-    if (pick) {
-      char.stats[pick[0]]++;
+    // MBTI 선호 스탯에 라운드로빈 분배 (상한 없음)
+    const preferred = sorted[i % sorted.length];
+    if (preferred) {
+      char.stats[preferred[0]] = (char.stats[preferred[0]] || 0) + 1;
       char.statPoints--;
     } else {
-      // Fallback: find any stat under cap
-      const any = Object.keys(char.stats).find(k => char.stats[k] < 10);
-      if (any) { char.stats[any]++; char.statPoints--; }
+      const any = allStats[i % allStats.length];
+      if (any) { char.stats[any] = (char.stats[any] || 0) + 1; char.statPoints--; }
     }
   }
 }
@@ -797,20 +794,24 @@ function processThreatAttack(aliveChars, gs, dayLogs) {
     }
   }
 
-  // Crisis choice at very high threat
+  // Crisis choice at very high threat — 최소 30일 쿨다운 (매일 스팸 방지)
   if (threat >= 90 && !gs.pendingChoices.some(c => c.type === 'threat_crisis')) {
-    gs.pendingChoices.push({
-      type: 'threat_crisis',
-      title: '🚨 위기 상황: 세계 위협 최고조',
-      desc: `세계 위협도가 ${Math.floor(threat)}에 달했습니다. 이대로면 길드가 무너집니다. 길드장의 결단이 필요합니다.`,
-      options: [
-        { label: '⚔ 전원 출격 — 정면 돌파', desc: '망설일 시간이 없다. 길드 전원이 지금 당장 달려나가 상황을 뒤집는다. 피를 흘려야 할 것이다.', reward: 'assault' },
-        { label: '🛡 진지 구축 — 버텨낸다', desc: '자금을 쏟아부어 방어선을 단단히 쌓는다. 충돌 없이 시간을 번다. 하지만 문제의 근원은 남는다.', reward: 'defend' },
-        { label: '💰 협상 — 금화로 침묵을 산다', desc: '적에게 금화를 넘기고 잠시 평화를 빌린다. 치욕스럽지만 살아남는다. 언제까지 통할지는 모른다.', reward: 'bribe' },
-        { label: '🙏 신에게 맡긴다', desc: '인간의 힘이 닿지 않는 곳이라면 신이 뜻을 보여줄지도 모른다. 결과는 길드원의 믿음에 달려 있다.', reward: 'pray' },
-      ],
-    });
-    dayLogs.push({ logClass: 'log-world', text: `🚨 긴급! 길드장의 결단을 기다립니다!` });
+    if (!gs.world._lastCrisisDay) gs.world._lastCrisisDay = 0;
+    if (gs.day - gs.world._lastCrisisDay >= 30) {
+      gs.world._lastCrisisDay = gs.day;
+      gs.pendingChoices.push({
+        type: 'threat_crisis',
+        title: '🚨 위기 상황: 세계 위협 최고조',
+        desc: `세계 위협도가 ${Math.floor(threat)}에 달했습니다. 이대로면 길드가 무너집니다. 길드장의 결단이 필요합니다.`,
+        options: [
+          { label: '⚔ 전원 출격 — 정면 돌파', desc: '망설일 시간이 없다. 길드 전원이 지금 당장 달려나가 상황을 뒤집는다. 피를 흘려야 할 것이다.', reward: 'assault' },
+          { label: '🛡 진지 구축 — 버텨낸다', desc: '자금을 쏟아부어 방어선을 단단히 쌓는다. 충돌 없이 시간을 번다. 하지만 문제의 근원은 남는다.', reward: 'defend' },
+          { label: '💰 협상 — 금화로 침묵을 산다', desc: '적에게 금화를 넘기고 잠시 평화를 빌린다. 치욕스럽지만 살아남는다. 언제까지 통할지는 모른다.', reward: 'bribe' },
+          { label: '🙏 신에게 맡긴다', desc: '인간의 힘이 닿지 않는 곳이라면 신이 뜻을 보여줄지도 모른다. 결과는 길드원의 믿음에 달려 있다.', reward: 'pray' },
+        ],
+      });
+      dayLogs.push({ logClass: 'log-world', text: `🚨 긴급! 길드장의 결단을 기다립니다!` });
+    }
   }
 }
 
@@ -1110,7 +1111,7 @@ function processInventoryItemPassives(char, gs, dayLogs) {
       dayLogs.push({ logClass: 'log-system', text: `💀 ${char.name}이(가) 봉인된 재료의 어두운 기운에 잠식되고 있다. (이성 -2)` });
     } else {
       // 어둠의 힘으로 잠깐 강화
-      char.stats.str = Math.min(10, (char.stats.str || 0) + 1);
+      char.stats.str = (char.stats.str || 0) + 1;
       // 임시: 이후 회복 (다음 날 원상복귀 X — 간단히 로그만)
       dayLogs.push({ logClass: 'log-system', text: `🌑 ${char.name}이(가) 금지된 힘에 잠시 눈을 떴다. (STR 일시 고취)` });
     }
@@ -1214,7 +1215,13 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
     return '█'.repeat(filled) + '░'.repeat(len - filled);
   };
 
-  const enemyTotal = Math.floor(threat * 4.5);
+  // ── 연도별 침공 스케일 (점진적 난이도 상승) ──
+  const _raidYear = d.year;
+  const _yearScale = 1.0 + (_raidYear - 1) * 0.45; // 1년차: 1.0×, 2년차: 1.45×, 3년차: 1.9×, ...
+  const _maxRounds = Math.min(6, 3 + Math.floor((_raidYear - 1) * 0.8)); // 1년차:3, 2년차:3-4, 3년차:4, 4년차:5, 5년차+:6
+  dayLogs.push({ logClass: 'log-battle', text: `  [${_raidYear}년차 침공] 난이도 배율 ×${_yearScale.toFixed(1)} / 최대 ${_maxRounds}라운드` });
+
+  const enemyTotal = Math.floor(threat * 4.5 * _yearScale);
   let remainingEnemyHP = enemyTotal;
 
   // ── 침공 전 마나 소모 (전투 집결·준비 과정) ──
@@ -1228,8 +1235,8 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
 
   let activeFighters = aliveChars.filter(c => !c.isDead);
 
-  // ── 최대 3라운드 전투 (적 완파 or 전원 탈락 시 조기 종료) ──
-  const MAX_ROUNDS = 3;
+  // ── 연도별 최대 라운드 전투 ──
+  const MAX_ROUNDS = _maxRounds;
   // 침공 전체에서 스킬을 이미 사용한 캐릭터 추적 (한 침공당 스킬 1회 제한)
   const usedSkillsThisInvasion = new Set();
   for (let round = 1; round <= MAX_ROUNDS && activeFighters.length > 0 && remainingEnemyHP > 0; round++) {
@@ -1305,9 +1312,9 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
       const charAtk = Math.round(sk.atkBonus + statAtk + buffAll);
       remainingEnemyHP -= charAtk;
 
-      // 받는 피해
+      // 받는 피해 (연도별 스케일 적용)
       const spreadDiv = Math.sqrt(activeFighters.length);
-      const baseDmg   = Math.max(2, Math.round((threat * 0.9 + randInt(3, 12)) / spreadDiv));
+      const baseDmg   = Math.max(2, Math.round((threat * 0.9 * _yearScale + randInt(3, 12)) / spreadDiv));
 
       char.actionCounts = char.actionCounts || {};
       char.actionCounts.combat = (char.actionCounts.combat || 0) + 1;
@@ -2412,7 +2419,7 @@ function resolveGuildAnnounce(reward, choice, gs) {
 
   } else if (tid === 'town_petition') {
     if (reward === 'train') {
-      alive.forEach(c => { c.stats.str = Math.min(10, (c.stats.str||0)+1); c.stats.end = Math.min(10, (c.stats.end||0)+1); c.maxHp = 50+c.stats.str*5+c.stats.end*3; });
+      alive.forEach(c => { c.stats.str = (c.stats.str||0)+1; c.stats.end = (c.stats.end||0)+1; c.maxHp = 50+c.stats.str*5+c.stats.end*3; });
       logs.push({ logClass: 'log-special', text: `🥊 훈련 강화 명령! 모든 모험가의 STR·END가 +1 성장했다.` });
       logs.push(dlgLog('길드장', '훈련을 게을리하면 마왕군에게 당한다. 몸으로 익혀라.'));
     } else if (reward === 'heal') {
@@ -2483,13 +2490,13 @@ function resolveGuildAnnounce(reward, choice, gs) {
 
   } else if (tid === 'dark_omen') {
     if (reward === 'prepare') {
-      alive.forEach(c => { c.exp += 25; c.stats.str = Math.min(10, (c.stats.str||0)+1); c.maxHp = 50+c.stats.str*5+c.stats.end*3; });
+      alive.forEach(c => { c.exp += 25; c.stats.str = (c.stats.str||0)+1; c.maxHp = 50+c.stats.str*5+c.stats.end*3; });
       logs.push({ logClass: 'log-special', text: `🥊 비상 훈련 완료! 모든 모험가가 어둠에 맞설 준비를 마쳤다. (EXP +25, STR+1)` });
       logs.push(dlgLog('길드장', '두려워할 필요 없다. 우리가 먼저 어둠을 찾아 나설 것이다.'));
     } else if (reward === 'offering') {
       const targets = alive.filter(c => ['cleric','paladin','druid'].includes(c.class));
       const list = targets.length ? targets : alive;
-      list.forEach(c => { c.stats.fai = Math.min(10, (c.stats.fai||0)+1); c.sanity = Math.min(100, c.sanity+5); });
+      list.forEach(c => { c.stats.fai = (c.stats.fai||0)+1; c.sanity = Math.min(100, c.sanity+5); });
       gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 5);
       logs.push({ logClass: 'log-special', text: `⛪ 대규모 봉헌식이 거행됐다. 신성한 힘이 깃들었다. (위협도 -5, FAI+1, 이성+5)` });
     } else if (reward === 'alliance') {
@@ -2509,7 +2516,7 @@ function resolveGuildAnnounce(reward, choice, gs) {
       if (canAfford) {
         if ((gs.world.townGold||0) >= hireCost) gs.world.townGold -= hireCost;
         else richest.gold -= hireCost;
-        alive.forEach(c => { c.exp += 20; c.stats.str = Math.min(10, (c.stats.str||0)+1); c.maxHp = 50+c.stats.str*5+c.stats.end*3; });
+        alive.forEach(c => { c.exp += 20; c.stats.str = (c.stats.str||0)+1; c.maxHp = 50+c.stats.str*5+c.stats.end*3; });
         logs.push({ logClass: 'log-special', text: `⭐ 전설의 용사가 길드에 합류했다! 사기가 치솟았다. (전원 EXP+20, STR+1)` });
         logs.push(dlgLog('전설의 용사', '나를 원하는 곳은 많았지만... 이 길드라면 함께 싸울 수 있을 것 같소.'));
       } else {
@@ -3295,7 +3302,7 @@ function applyClassPromotion(char, classId, gs) {
     : null;
   char.classSkills = [...classDef.skills, ...(_invasionSkObj ? [_invasionSkObj] : [])];
   for (const [stat, bonus] of Object.entries(classDef.statBonus || {})) {
-    char.stats[stat] = Math.min(10, (char.stats[stat] || 0) + bonus);
+    char.stats[stat] = (char.stats[stat] || 0) + bonus;
   }
   if (classDef.mpActive) {
     char.mp = char.maxMp;
@@ -3466,8 +3473,8 @@ async function nextEvent() {
         showToast(`⚔ ${dateNow.seasonEmoji}${dateNow.season} 말일 — 마왕군 습격! (${dateNow.label})`, 'danger');
         break;
       }
-      if (gs.world.threatLevel >= 80) {
-        showToast(`🚨 위협도 ${Math.round(gs.world.threatLevel)}! 위기 상황 감지 (Day ${gs.day})`, 'danger');
+      if (gs.world.threatLevel >= 92) {
+        showToast(`🚨 위협도 ${Math.round(gs.world.threatLevel)}! 극도 위기 — 즉각 대응 필요 (Day ${gs.day})`, 'danger');
         break;
       }
 

@@ -524,79 +524,15 @@ const BASE_STAGES = [
 ];
 
 // ─── ENDINGS ─────────────────────────────
+// 현재 엔딩은 단 하나: 마왕군 침공에 의한 전멸
 const ENDINGS = [
-  {
-    id: 'hero_return',
-    name: '영웅의 귀환',
-    icon: '🦸',
-    desc: '세계의 어둠이 걷히고, 모험가들은 영웅으로 역사에 이름을 남겼다.',
-    condition: (gs) => gs.world.threatLevel <= 0 && gs.characters.some(c => !c.isDead && c.currentPartyId),
-  },
-  {
-    id: 'kingdom_prosperity',
-    name: '왕국의 번영',
-    icon: '🏰',
-    desc: '거점이 왕도로 성장하고, 경제는 안정을 되찾았다. 모험가들의 활약이 세계를 바꿨다.',
-    condition: (gs) => gs.world.baseLevel >= 4 && !checkMarketCollapse(gs),
-  },
-  {
-    id: 'golden_merchant',
-    name: '황금 상인',
-    icon: '💰',
-    desc: '시장을 손아귀에 쥔 전설의 상인이 탄생했다. 세계의 경제가 그의 손에 달려 있다.',
-    condition: (gs) => gs.characters.some(c => c.class === 'merchant' && c.gold >= 10000),
-  },
   {
     id: 'darkness_consumed',
     name: '어둠에 잠식',
     icon: '💀',
-    desc: '모든 영혼이 어둠에 삼켜졌다. 세계는 침묵했다.',
+    desc: '마왕의 군세를 끝내 막아내지 못했다. 모든 영혼이 어둠에 삼켜지고, 세계는 침묵 속에 잠들었다. 그들의 이름은 아무도 기억하지 못한다.',
     condition: (gs) => gs.characters.length > 0 && gs.characters.every(c => c.isDead),
     bad: true,
-  },
-  {
-    id: 'economic_collapse',
-    name: '경제 붕괴',
-    icon: '📉',
-    desc: '시장이 무너지고 골드는 휴지조각이 됐다. 물물교환의 시대가 열렸다.',
-    condition: (gs) => checkMarketCollapse(gs),
-    bad: true,
-  },
-  {
-    id: 'legend_adventurer',
-    name: '전설의 모험가',
-    icon: '⭐',
-    desc: '최고의 경지에 오른 모험가. 그의 이름은 수백 년이 지나도 회자될 것이다.',
-    condition: (gs) => gs.characters.some(c => (c.level || 1) >= 15 && Object.values(c.stats).some(v => v >= 9)),
-  },
-  {
-    id: 'eternal_companions',
-    name: '영원한 동반자',
-    icon: '💑',
-    desc: '죽음도 갈라놓지 못한 두 영혼. 그들의 이야기는 전설이 됐다.',
-    condition: (gs) => {
-      for (const c of gs.characters) {
-        for (const r of c.relationships) {
-          if (r.type === 'oathbound' && r.affection >= 100) return true;
-        }
-      }
-      return false;
-    },
-  },
-  {
-    id: 'dark_lord',
-    name: '어둠의 군주',
-    icon: '👿',
-    desc: '세계를 정복한 어둠의 군주가 탄생했다. 두려움이 왕국을 지배한다.',
-    condition: (gs) => gs.characters.some(c => c.class === 'necromancer' && c.alignment === 'Dark' && gs.world.threatLevel >= 90),
-    bad: true,
-  },
-  {
-    id: 'quiet_retirement',
-    name: '조용한 은퇴',
-    icon: '🌅',
-    desc: '오랜 모험을 마친 영웅이 조용히 자리를 내려놓았다. 평화로운 노후가 기다린다.',
-    condition: (gs) => gs.characters.some(c => c.isRetired),
   },
 ];
 
