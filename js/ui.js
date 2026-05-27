@@ -450,18 +450,30 @@ function renderMarketPanel(gs) {
   if (gs.world.rareOffer) {
     const ro = gs.world.rareOffer;
     const daysLeft = ro.expiresDay - gs.day;
-    const statsStr = Object.entries(ro.item.stats || {}).map(([k, v]) => `${k}+${v}`).join(' ');
+    // bonus 또는 stats 둘 다 지원
+    const bonusObj = ro.item.bonus || ro.item.stats || {};
+    const STAT_LABELS = { str:'STR', int:'INT', fai:'FAI', agi:'AGI', cha:'CHA', end:'END' };
+    const statsStr = Object.entries(bonusObj)
+      .map(([k, v]) => `<span class="rare-stat-tag">${STAT_LABELS[k]||k} +${v}</span>`)
+      .join('');
+    const slotLabel = { weapon:'무기', armor:'갑옷', accessory:'장신구' }[ro.item.slot] || ro.item.slot;
     rareOfferHtml = `
       <div class="rare-offer-banner">
         <div class="rare-offer-title">🌟 전설 행상인 등장!</div>
-        <div class="rare-offer-item">${ro.item.icon || '⚔'} <strong>${ro.item.name}</strong>
-          ${statsStr ? `<span class="rare-offer-stats">${statsStr}</span>` : ''}
+        <div class="rare-offer-item-row">
+          <span class="rare-offer-icon">${ro.item.icon || '⚔'}</span>
+          <div class="rare-offer-details">
+            <div class="rare-offer-name">${ro.item.name}</div>
+            <div class="rare-offer-slot">Tier ${ro.item.tier || 4} · ${slotLabel}</div>
+            <div class="rare-offer-stats-row">${statsStr}</div>
+            ${ro.item.desc ? `<div class="rare-offer-desc">${ro.item.desc}</div>` : ''}
+          </div>
         </div>
         <div class="rare-offer-meta">
-          <span class="rare-offer-price">${ro.item.price.toLocaleString()}G</span>
+          <span class="rare-offer-price">💰 ${ro.item.price.toLocaleString()}G</span>
           <span class="rare-offer-days">⏳ ${daysLeft}일 남음</span>
         </div>
-        <div class="rare-offer-note">캐릭터가 조건 충족 시 자동으로 구매를 시도합니다.</div>
+        <div class="rare-offer-note">💡 캐릭터가 조건 충족 시 자동으로 구매를 시도합니다.</div>
       </div>
     `;
   }
@@ -585,6 +597,14 @@ function buildInventorySection(char, gs) {
   // ── 스킬 UI: 일반 스킬 3개 + 침공 스킬 1개 — 모두 동일한 팝업 스타일 ──
   const raidSk = typeof RAID_SKILL_TABLE !== 'undefined' && char.class ? RAID_SKILL_TABLE[char.class] : null;
 
+  // 별 단계 추가 효과 테이블 (SKILL_STAR_EFFECTS와 동기화)
+  const STAR_BONUS_LABELS = {
+    2: 'MP -1 감소',
+    3: '효과 +15%',
+    4: '침공 내 2회 가능',
+    5: 'MP -2 추가 · 효과 +30%',
+  };
+
   // 스킬 팝업 칩 렌더러 (isRaid: 침공 스킬 여부)
   function _skillChip(name, mpCost, effect, skillKey, isRaid) {
     const lvl = isRaid ? null : ((char.skillLevels || {})[skillKey] || 1);
@@ -594,6 +614,13 @@ function buildInventorySection(char, gs) {
       ? 'rgba(255,23,68,0.10)' : 'rgba(100,180,255,0.08)';
     const chipBorder = isRaid ? '#ff1744' : '#546e7a';
     const chipColor  = isRaid ? '#ff8a80' : '#b0bec5';
+    // 현재 별 단계 보너스 (Lv.2부터)
+    const starBonusHtml = (lvl && lvl >= 2)
+      ? `<div class="skill-popup-star-bonus">✦ ${STAR_BONUS_LABELS[lvl] || ''}</div>` : '';
+    // 다음 단계 미리보기
+    const nextLvl = lvl && lvl < 5 ? lvl + 1 : null;
+    const nextBonusHtml = nextLvl
+      ? `<div class="skill-popup-next">다음 별: ${STAR_BONUS_LABELS[nextLvl] || ''}</div>` : '';
     return `<div class="skill-popup-chip" style="background:${chipBg};border-color:${chipBorder};color:${chipColor}">
       <div class="skill-popup-header">
         <span class="skill-popup-type">${typeLabel}</span>
@@ -601,7 +628,8 @@ function buildInventorySection(char, gs) {
         <span class="skill-popup-mp">MP -${mpCost}</span>
       </div>
       <div class="skill-popup-effect">${effect}</div>
-      ${stars ? `<div class="skill-popup-stars">${stars} Lv.${lvl}</div>` : ''}
+      ${stars ? `<div class="skill-popup-stars">${stars} Lv.${lvl}${starBonusHtml}</div>` : ''}
+      ${nextBonusHtml}
     </div>`;
   }
 
@@ -707,9 +735,12 @@ function renderRelationsPanel(gs, selectedChar) {
       const affPct = Math.max(0, ((rel.affection + 100) / 300) * 100);
       const isNeg = rel.affection < 0;
       const targetDead = target.isDead;
+
+      // A → B (이 캐릭터 → 대상)
       html += `
         <div class="relation-row">
-          <div style="font-size:11px;min-width:70px;color:${targetDead ? 'var(--text-muted)' : 'inherit'}">
+          <div style="font-size:10px;min-width:22px;color:#90a4ae;white-space:nowrap">→</div>
+          <div style="font-size:11px;min-width:65px;color:${targetDead ? 'var(--text-muted)' : 'inherit'}">
             ${targetDead ? '💀 ' : ''}${target.name}${targetDead ? '<span style="font-size:9px"> †</span>' : ''}
           </div>
           <span class="relation-type-badge">${relDef.icon} ${relDef.name}</span>
@@ -719,6 +750,25 @@ function renderRelationsPanel(gs, selectedChar) {
           <div class="affection-val">${Math.round(rel.affection)}</div>
         </div>
       `;
+
+      // B → A (대상 → 이 캐릭터)
+      const reverseRel = target.relationships?.find(r => r.targetId === char.id);
+      if (reverseRel) {
+        const revDef = RELATION_TYPES[reverseRel.type] || { name: reverseRel.type, icon: '?', positive: true };
+        const revPct = Math.max(0, ((reverseRel.affection + 100) / 300) * 100);
+        const revNeg = reverseRel.affection < 0;
+        html += `
+          <div class="relation-row" style="opacity:0.72;margin-left:8px;margin-top:-2px">
+            <div style="font-size:10px;min-width:22px;color:#78909c;white-space:nowrap">←</div>
+            <div style="font-size:11px;min-width:65px;color:var(--text-muted)">${target.name}</div>
+            <span class="relation-type-badge" style="opacity:0.8">${revDef.icon} ${revDef.name}</span>
+            <div class="affection-bar">
+              <div class="affection-fill ${revNeg ? 'neg' : ''}" style="width:${revPct}%"></div>
+            </div>
+            <div class="affection-val">${Math.round(reverseRel.affection)}</div>
+          </div>
+        `;
+      }
     }
     html += '</div>';
   }

@@ -822,22 +822,41 @@ h1,h2,h3,h4 { font-weight: 700; }
   margin-bottom: 5px;
   text-transform: uppercase;
 }
-.rare-offer-item {
+.rare-offer-item { /* legacy */ font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.rare-offer-item-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+.rare-offer-icon { font-size: 22px; flex-shrink: 0; }
+.rare-offer-details { flex: 1; }
+.rare-offer-name {
   font-size: 14px;
   font-weight: 700;
-  color: #fff;
-  margin-bottom: 4px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  color: #ffe082;
+  margin-bottom: 2px;
 }
-.rare-offer-stats {
+.rare-offer-slot { font-size: 10px; color: #b39ddb; margin-bottom: 4px; }
+.rare-offer-stats-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.rare-stat-tag {
   font-size: 11px;
-  font-weight: 400;
+  font-weight: 600;
   color: #b39ddb;
-  background: rgba(147,51,234,0.2);
+  background: rgba(147,51,234,0.25);
+  border: 1px solid rgba(147,51,234,0.4);
   border-radius: 4px;
   padding: 1px 6px;
+}
+.rare-offer-desc {
+  font-size: 10px;
+  color: #cfd8dc;
+  line-height: 1.5;
+  opacity: 0.9;
+}
+.rare-offer-stats { /* legacy */
+  font-size: 11px; font-weight: 400; color: #b39ddb;
+  background: rgba(147,51,234,0.2); border-radius: 4px; padding: 1px 6px;
 }
 .rare-offer-meta {
   display: flex;
@@ -1547,7 +1566,9 @@ input:checked + .toggle-slider::after {
 .skill-popup-name  { font-weight: 700; font-size: 12px; flex: 1; }
 .skill-popup-mp    { font-size: 10px; color: #80d8ff; white-space: nowrap; }
 .skill-popup-effect { font-size: 10px; opacity: 0.85; line-height: 1.5; }
-.skill-popup-stars { font-size: 10px; color: #ffd700; margin-top: 2px; }
+.skill-popup-stars { font-size: 10px; color: #ffd700; margin-top: 2px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.skill-popup-star-bonus { font-size: 9px; color: #ffe082; background: rgba(255,214,0,0.15); border-radius: 3px; padding: 1px 5px; }
+.skill-popup-next { font-size: 9px; color: #546e7a; margin-top: 2px; font-style: italic; }
 
 /* ─── ENDING MODAL ─── */
 .ending-content {

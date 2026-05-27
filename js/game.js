@@ -526,6 +526,14 @@ function autoDistributeStats(char, points) {
 // Level 2: 20 actions, Level 3: 60, Level 4: 150, Level 5: 350
 const SKILL_THRESHOLDS = [0, 20, 60, 150, 350];
 
+// 별 단계별 스킬 추가 효과 (UI 표시용)
+const SKILL_STAR_EFFECTS = {
+  2: 'MP 소모 -1 감소',
+  3: '스킬 효과 +15% 향상',
+  4: '한 침공에서 2회 사용 가능',
+  5: 'MP 소모 -2 추가 감소 · 효과 +30% 향상',
+};
+
 function processSkillLevels(aliveChars, gs, dayLogs) {
   for (const char of aliveChars) {
     if (!char.class || !char.classSkills || !char.classSkills.length) continue;
@@ -543,8 +551,11 @@ function processSkillLevels(aliveChars, gs, dayLogs) {
       if (currentLevel >= 5) continue;
       const threshold = SKILL_THRESHOLDS[currentLevel];
       if (actionCount >= threshold) {
-        char.skillLevels[skName] = currentLevel + 1;
-        dayLogs.push({ logClass: 'log-special', text: `✨ ${char.name}의 스킬 [${skName}]이(가) Lv.${currentLevel + 1}로 성장했다!` });
+        const newLevel = currentLevel + 1;
+        char.skillLevels[skName] = newLevel;
+        const stars = '★'.repeat(newLevel) + '☆'.repeat(5 - newLevel);
+        const starBonus = SKILL_STAR_EFFECTS[newLevel] || '';
+        dayLogs.push({ logClass: 'log-special', text: `✨ ${char.name}의 스킬 [${skName}]이(가) Lv.${newLevel} ${stars}로 성장했다!${starBonus ? `  (+효과: ${starBonus})` : ''}` });
         break;
       }
     }
