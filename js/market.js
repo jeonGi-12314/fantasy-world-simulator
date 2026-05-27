@@ -35,8 +35,13 @@ function recalcMarketPrices(gs) {
 
     item.regionFactor = regionFactor;
 
-    // Natural supply/demand drift toward equilibrium
-    item.supplyIndex = Math.max(5, item.supplyIndex + (100 - item.supplyIndex) * 0.02);
+    // 공급은 자연 소모로 서서히 감소 (캐릭터 구매·판매로만 보충)
+    // 단, 식료품·소모품은 소량 자연 생산 (완전 고갈 방지)
+    const isBasic = ['food','consumable'].includes(item.cat);
+    const naturalDecay = isBasic ? -0.2 : -0.5; // 기본 소모율
+    const naturalRegen = isBasic ? 0.8 : 0.0;   // 식료품·소모품만 소폭 자연 생산
+    item.supplyIndex = Math.max(isBasic ? 10 : 2, item.supplyIndex + naturalDecay + naturalRegen);
+    // 수요는 여전히 균형으로 복귀
     item.demandIndex = Math.max(5, item.demandIndex + (100 - item.demandIndex) * 0.02);
   }
 }
@@ -179,13 +184,13 @@ function applyClassEconomicEffects(char, gs) {
 
   const logs = [];
 
-  // Gold from class activity
+  // Gold from class activity — 10일마다 한 번 (매일 소액 대신 10일치 일괄)
   const [goldMin, goldMax] = classDef.goldPerDay || [0, 0];
-  if (goldMin > 0) {
-    const earned = randInt(goldMin, goldMax);
+  if (goldMin > 0 && gs.day % 10 === 0) {
+    const earned = randInt(goldMin * 10, goldMax * 10);
     char.gold += earned;
     gs.world.totalGoldCirculated += earned;
-    logs.push({ type: 'economy', text: `[클래스 수입] ${char.name}(${classDef.name})이(가) 일상 활동으로 ${earned}G를 벌었다.` });
+    logs.push({ type: 'economy', text: `[클래스 수입] ${char.name}(${classDef.name})이(가) 10일치 활동으로 ${earned}G를 벌었다.` });
   }
 
   // Class supply contributions

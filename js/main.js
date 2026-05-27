@@ -34,6 +34,16 @@ function bindAllEvents() {
   // Next Event button
   document.getElementById('next-event-btn')?.addEventListener('click', nextEvent);
 
+  // Next Event mode selector
+  const nemSel = document.getElementById('next-event-mode');
+  if (nemSel) {
+    // Sync initial value from GS
+    nemSel.value = window.GS?.settings?.nextEventMode || 'choice';
+    nemSel.addEventListener('change', () => {
+      if (window.GS) window.GS.settings.nextEventMode = nemSel.value;
+    });
+  }
+
   // Speed slider
   document.getElementById('speed-slider')?.addEventListener('input', onSpeedSliderChange);
 
@@ -86,6 +96,9 @@ function bindAllEvents() {
 
   // Character creation submit
   document.getElementById('char-create-submit').addEventListener('click', submitCharCreate);
+
+  // Character edit submit
+  document.getElementById('char-edit-submit').addEventListener('click', submitCharEdit);
 
   // Add relation button
   document.getElementById('add-relation-btn').addEventListener('click', addRelationRow);
@@ -194,6 +207,44 @@ function randomizeStats() {
   updateStatDisplay();
 }
 
+function randomizeAll() {
+  // 1. Random gender
+  const genders = ['male', 'female', 'other'];
+  const g = genders[Math.floor(Math.random() * genders.length)];
+  formGender = g;
+  document.querySelectorAll('[data-group="gender"]').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-group="gender"][data-value="${g}"]`)?.classList.add('active');
+  updateIconPicker(g);
+
+  // 2. Random portrait icon (from pool)
+  const icons = PORTRAIT_ICONS[g] || PORTRAIT_ICONS.male;
+  formPortraitIcon = icons[Math.floor(Math.random() * icons.length)];
+  document.querySelectorAll('.icon-option').forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.icon === formPortraitIcon);
+  });
+
+  // 3. Random name via Korean name generator
+  document.getElementById('char-name').value = randomKrName(g);
+
+  // 4. Random MBTI
+  const mbti = MBTI_LIST[Math.floor(Math.random() * MBTI_LIST.length)];
+  document.getElementById('char-mbti').value = mbti;
+
+  // 5. Random alignment
+  const aligns = ['Light', 'Neutral', 'Dark'];
+  const al = aligns[Math.floor(Math.random() * aligns.length)];
+  formAlignment = al;
+  document.querySelectorAll('[data-group="alignment"]').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-group="alignment"][data-value="${al}"]`)?.classList.add('active');
+
+  // 6. Random mental
+  const mentals = ['stable', 'stable', 'anxious', 'determined', 'traumatized'];
+  document.getElementById('char-mental').value = mentals[Math.floor(Math.random() * mentals.length)];
+
+  // 7. Random stats
+  randomizeStats();
+}
+
 function initCharCreationForm() {
   // Stat distribution UI
   const container = document.getElementById('stat-distribution');
@@ -236,8 +287,16 @@ function initCharCreationForm() {
     });
   });
 
-  // Randomize stats button
+  // Randomize stats button (stats only)
   document.getElementById('randomize-stats-btn')?.addEventListener('click', randomizeStats);
+
+  // Total random button (everything)
+  document.getElementById('total-random-btn')?.addEventListener('click', randomizeAll);
+
+  // Name-only random button (gender-aware)
+  document.getElementById('random-name-btn')?.addEventListener('click', () => {
+    document.getElementById('char-name').value = randomKrName(formGender);
+  });
 
   // Init icon picker for default gender
   updateIconPicker('male');
@@ -359,6 +418,89 @@ function getMirrorRelationType(type) {
   return mirrors[type] || type;
 }
 
+// ─── CHARACTER EDIT / DELETE ─────────────
+const PORTRAIT_OPTIONS = ['🧔','👩','🧑','🧝','🧙','🧚','🧛','🧟','👴','👵','🧓','🦸','🦹','🧜','🧞','🤺','👷','🧑‍🌾','🧑‍🔬','🧑‍🎨','⚔','🏹','🔮','🗡','🛡'];
+let _editingCharId = null;
+
+function openCharEditModal(charId) {
+  const char = window.GS.characters.find(c => c.id === charId);
+  if (!char) return;
+  _editingCharId = charId;
+
+  document.getElementById('edit-char-name').value = char.name;
+
+  // Portrait picker
+  const picker = document.getElementById('edit-portrait-picker');
+  picker.innerHTML = PORTRAIT_OPTIONS.map(icon =>
+    `<span class="portrait-edit-opt${char.portraitIcon === icon ? ' selected' : ''}" data-icon="${icon}">${icon}</span>`
+  ).join('');
+  picker.querySelectorAll('.portrait-edit-opt').forEach(el => {
+    el.addEventListener('click', () => {
+      picker.querySelectorAll('.portrait-edit-opt').forEach(e => e.classList.remove('selected'));
+      el.classList.add('selected');
+    });
+  });
+
+  // Alignment select
+  const alignSel = document.getElementById('edit-char-alignment');
+  alignSel.innerHTML = Object.entries(ALIGNMENTS).map(([k, v]) =>
+    `<option value="${k}"${char.alignment === k ? ' selected' : ''}>${v.name}</option>`
+  ).join('');
+
+  document.getElementById('char-edit-modal').classList.remove('hidden');
+}
+
+function submitCharEdit() {
+  const char = window.GS.characters.find(c => c.id === _editingCharId);
+  if (!char) return;
+
+  const newName = document.getElementById('edit-char-name').value.trim();
+  if (!newName) { showToast('이름을 입력하세요!', 'warning'); return; }
+
+  char.name = newName;
+  char.alignment = document.getElementById('edit-char-alignment').value;
+
+  const selectedPortrait = document.querySelector('#edit-portrait-picker .portrait-edit-opt.selected');
+  if (selectedPortrait) char.portraitIcon = selectedPortrait.dataset.icon;
+
+  document.getElementById('char-edit-modal').classList.add('hidden');
+  renderAll();
+  saveGame(window.GS);
+  showToast(`${newName}의 정보가 수정됐다.`, 'success');
+}
+
+function deleteChar(charId) {
+  const char = window.GS.characters.find(c => c.id === charId);
+  if (!char) return;
+  if (!confirm(`정말 ${char.name}을(를) 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+
+  // Remove from characters
+  window.GS.characters = window.GS.characters.filter(c => c.id !== charId);
+
+  // Clean up all relationships referencing this char
+  window.GS.characters.forEach(c => {
+    c.relationships = c.relationships.filter(r => r.targetId !== charId);
+  });
+
+  // Clean up parties
+  if (window.GS.parties) {
+    window.GS.parties = window.GS.parties.filter(p => {
+      p.members = (p.members || []).filter(id => id !== charId);
+      return p.members.length > 0;
+    });
+  }
+
+  // Clean up pending promotions
+  window.GS.pendingPromotions = (window.GS.pendingPromotions || []).filter(p => p.charId !== charId);
+
+  // Clean up pending choices referencing this char
+  window.GS.pendingChoices = (window.GS.pendingChoices || []).filter(pc => pc.charId !== charId);
+
+  renderAll();
+  saveGame(window.GS);
+  showToast(`${char.name}이(가) 세계에서 사라졌다.`, 'info');
+}
+
 // ─── SETTINGS ────────────────────────────
 let activeSettingsTab = 'relation';
 
@@ -386,6 +528,15 @@ function bindSettingsTabs() {
         window.GS.settings[key] = input.checked;
       } else if (input.type === 'number') {
         window.GS.settings[key] = parseFloat(input.value) || 0;
+      } else if (input.tagName === 'SELECT') {
+        // 숫자값 select는 number로 파싱 (e.g. battleLogSpeed)
+        const _numVal = Number(input.value);
+        window.GS.settings[key] = (!isNaN(_numVal) && input.value !== '') ? _numVal : input.value;
+        // nextEventMode 변경 시 헤더 드롭다운도 동기화
+        if (key === 'nextEventMode') {
+          const nemSel = document.getElementById('next-event-mode');
+          if (nemSel) nemSel.value = input.value;
+        }
       }
     });
     saveGame(window.GS);
