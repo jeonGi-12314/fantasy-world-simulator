@@ -52,6 +52,13 @@ async function nextDay() {
     for (const char of aliveChars) {
       // Status effect passives
       applyStatusPassives(char, gs, dayLogs);
+      // 독 등으로 HP가 0이 되면 즉시 사망 처리 (이벤트 진행 전)
+      if (!char.isDead && char.hp <= 0) {
+        char.isDead = true;
+        char.hp = 0;
+        dayLogs.push({ logClass: 'log-death', text: `💀 ${char.name}이(가) 상태이상으로 쓰러졌다...` });
+        if (char.currentPartyId) leaveParty(char, gs);
+      }
       if (char.isDead) continue;
 
       // Pick & resolve main event
@@ -1331,10 +1338,11 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
         char.hp = 1;
         char.statusEffects = [...new Set([...char.statusEffects, 'exhausted'])];
         dayLogs.push({ logClass: 'log-battle', text: `    ☠ HP -${dmg} → 중상! 전선 이탈  (1/${char.maxHp})` });
-        const year = Math.floor((gs.day - 1) / 360) + 1;
-        const deathFloor = Math.max(30, 55 - (year - 1) * 8);
-        const deathChance = Math.min(0.85, Math.max(0, (threat - deathFloor) / 60));
-        if (threat >= deathFloor && Math.random() < deathChance) {
+        // 사망 판정: 위협도 70 이상부터 최대 30% 확률 (게임 지속성 보장)
+        // 최소 1명은 생존하도록 보장
+        const remainingAlive = activeFighters.filter(c => !c.isDead && c !== char).length;
+        const deathChance = Math.min(0.30, Math.max(0, (threat - 70) / 100));
+        if (threat >= 70 && remainingAlive >= 1 && Math.random() < deathChance) {
           char.isDead = true;
           dayLogs.push({ logClass: 'log-battle', text: `    ☠️ ${char.name}이(가) 전사했다...` });
         }
@@ -2245,6 +2253,42 @@ const GUILD_ANNOUNCE_POOL = [
       { label: '무관심', desc: '소문은 소문일 뿐입니다.', reward: 'ignore' },
     ],
   },
+  {
+    id: 'supply_shortage',
+    icon: '📦',
+    title: '📦 [길드 공표] 물자 수급 퀘스트',
+    desc: '길드 창고 점검 결과, 일부 핵심 물자의 재고가 위험 수준으로 떨어졌습니다.\n길드장으로서 수급 우선순위를 결정해 모험가들에게 임무를 부여하십시오.',
+    condition: (gs) => {
+      const SUPPLY_CATS = new Set(['food','consumable','material','loot']);
+      return Object.values(gs.market || {}).some(item => item.supplyIndex < 25 && SUPPLY_CATS.has(item.cat));
+    },
+    isQuestScroll: true,
+    buildOptions: (gs) => {
+      const SUPPLY_CATS = new Set(['food','consumable','material','loot']);
+      // 품귀 순으로 정렬, 최대 4개
+      const lowItems = Object.entries(gs.market || {})
+        .filter(([, item]) => item.supplyIndex < 35 && SUPPLY_CATS.has(item.cat))
+        .sort(([, a], [, b]) => a.supplyIndex - b.supplyIndex)
+        .slice(0, 4);
+
+      // 공급지수에 따른 등급: <5 → S, <12 → A, <20 → B, <35 → C
+      const getGrade = (si) => si < 5 ? 'S' : si < 12 ? 'A' : si < 20 ? 'B' : 'C';
+      const getRewardGold = (si) => si < 5 ? 400 : si < 12 ? 280 : si < 20 ? 180 : 100;
+      const getSupplyBoost = (si) => si < 5 ? 60 : si < 12 ? 45 : si < 20 ? 30 : 20;
+
+      return lowItems.map(([id, item]) => {
+        const grade = getGrade(item.supplyIndex);
+        const gold = getRewardGold(item.supplyIndex);
+        const boost = getSupplyBoost(item.supplyIndex);
+        return {
+          label: `${item.name} 수급`,
+          desc: `현재 재고: ${Math.floor(item.supplyIndex)} / 목표: 60 &nbsp;|&nbsp; 시장가: ${item.currentPrice}G<br>임무 성공 → 공급 +${boost}, 보상금 ${gold}G 분배`,
+          reward: id,
+          grade,
+        };
+      });
+    },
+  },
 ];
 
 function processGuildAnnounce(gs, dayLogs) {
@@ -2277,12 +2321,16 @@ function processGuildAnnounce(gs, dayLogs) {
   gs.world._announceHistory[template.id] = gs.day; // 이 템플릿 사용 기록
 
   const d = getDayDate(gs.day);
+  // 동적 옵션 생성 지원 (supply_shortage 등)
+  const opts = template.buildOptions ? template.buildOptions(gs) : template.options;
+  if (!opts || !opts.length) return; // 옵션이 없으면 (품귀 품목 없음 등) 스킵
   gs.pendingChoices.push({
     type: 'guild_announce',
     templateId: template.id,
     title: template.title,
     desc: `[길드장 공표 — ${d.label}]\n\n${template.desc}`,
-    options: template.options,
+    options: opts,
+    isQuestScroll: !!template.isQuestScroll,
   });
   dayLogs.push({ logClass: 'log-world', text: `${template.icon} [길드장 공표] ${template.title} — 결정을 내려야 합니다!` });
 }
@@ -2476,6 +2524,39 @@ function resolveGuildAnnounce(reward, choice, gs) {
       logs.push({ logClass: 'log-economy', text: `💰 소개료 ${ref}G를 받고 경쟁 길드에 연결했다.` });
     } else {
       logs.push({ logClass: 'log-system', text: `🌟 소문을 무시했다. 그 용사는 다른 길드에 합류했다는 이야기가 들린다.` });
+    }
+
+  } else if (tid === 'supply_shortage') {
+    // reward = item id (e.g. 'travel_food', 'healing_potion', ...)
+    const targetItem = gs.market[reward];
+    if (targetItem) {
+      // 성공 여부: 전투/탐험 능력에 따라 확률 결정 (더 많은 인원 = 더 높은 성공률)
+      const successChance = Math.min(0.92, 0.50 + alive.length * 0.08);
+      const succeeded = Math.random() < successChance;
+      const itemName = targetItem.name;
+
+      if (succeeded) {
+        // 공급 부족 등급에 따른 보상 결정
+        const si = targetItem.supplyIndex;
+        const boost  = si < 5 ? 60 : si < 12 ? 45 : si < 20 ? 30 : 20;
+        const gold   = si < 5 ? 400 : si < 12 ? 280 : si < 20 ? 180 : 100;
+        targetItem.supplyIndex = Math.min(200, targetItem.supplyIndex + boost);
+        alive.forEach(c => { c.exp += Math.floor(gold / 20); c.gold += Math.floor(gold / alive.length); });
+        gs.world.townGold = (gs.world.townGold||0) + Math.floor(gold * 0.3);
+        logs.push({ logClass: 'log-economy', text: `📦 수급 퀘스트 성공! [${itemName}]의 재고가 보충됐다. (공급 +${boost}, 보상금 ${gold}G 분배)` });
+        const hero = alive[Math.floor(Math.random() * alive.length)];
+        logs.push(dlgLog(hero.name, `겨우 구해왔습니다. ${itemName}이(가) 동났을 때 얼마나 힘들었는지 몰라요.`));
+      } else {
+        // 실패: 소량만 확보
+        const partialBoost = Math.floor(targetItem.supplyIndex < 12 ? 10 : 6);
+        targetItem.supplyIndex = Math.min(200, targetItem.supplyIndex + partialBoost);
+        alive.forEach(c => { c.hp = Math.max(1, c.hp - randInt(5, 15)); c.exp += 5; });
+        logs.push({ logClass: 'log-economy', text: `📦 수급 퀘스트 부분 성공. [${itemName}]을 소량 확보했지만 충분하지 않다. (공급 +${partialBoost}, 전원 소량 부상)` });
+        const hero = alive[Math.floor(Math.random() * alive.length)];
+        logs.push(dlgLog(hero.name, `최선을 다했는데... ${itemName}은 구하기가 정말 어려웠어요.`));
+      }
+    } else {
+      logs.push({ logClass: 'log-system', text: `📦 임무 대상 물자를 확인할 수 없습니다.` });
     }
   }
 

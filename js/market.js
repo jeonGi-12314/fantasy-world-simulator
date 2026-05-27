@@ -140,48 +140,70 @@ const MKT_DLG_BLACKMARKET = [
 ];
 
 // ── Market anomaly detection ──────────────
+// 대사 출력 쿨다운: 5일에 1회만 시장 캐릭터 대사 출력 (로그 과잉 방지)
+const MKT_DLG_COOLDOWN = 5;
+
 function checkMarketAnomalies(gs) {
   const anomalies = [];
   const aliveChars = (gs.characters || []).filter(c => !c.isDead);
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
   const randChar = aliveChars.length ? aliveChars[Math.floor(Math.random() * aliveChars.length)].name : '모험가';
 
+  // 대사 쿨다운 체크: 마지막 출력 후 5일 이상 지나야 대사 출력
+  if (!gs.world._lastMarketDlgDay) gs.world._lastMarketDlgDay = 0;
+  const dlgReady = (gs.day - gs.world._lastMarketDlgDay) >= MKT_DLG_COOLDOWN;
+
   // Shortage: consumable/food/material/loot items only (장비는 수요공급 미적용)
   const SUPPLY_CATS = new Set(['food','consumable','material','loot']);
-  for (const [id, item] of Object.entries(gs.market)) {
-    if (item.supplyIndex < 10 && SUPPLY_CATS.has(item.cat)) {
+
+  // 대사는 5일 쿨다운 충족 시에만, 최대 1개만 출력
+  if (dlgReady) {
+    // 품귀 대사 (공급 부족 아이템 중 랜덤 1개만)
+    const shortItems = Object.entries(gs.market).filter(([id, item]) => item.supplyIndex < 10 && SUPPLY_CATS.has(item.cat));
+    if (shortItems.length > 0) {
+      const [, item] = shortItems[Math.floor(Math.random() * shortItems.length)];
       const dlg = pick(MKT_DLG_SHORTAGE)(randChar, item.name);
       anomalies.push({ type: 'shortage', text: `🛒 ${dlg}` });
+      gs.world._lastMarketDlgDay = gs.day;
     }
   }
 
   // Inflation check (silent — no anomaly log)
   checkInflation(gs);
 
-  // Economic collapse
-  if (gs.settings.economicCollapseEvent) {
+  // Economic collapse (5일 쿨다운 포함)
+  if (gs.settings.economicCollapseEvent && dlgReady) {
     const lowCount = Object.values(gs.market).filter(i => i.supplyIndex < 10 && SUPPLY_CATS.has(i.cat)).length;
     const totalGold = gs.characters.reduce((s, c) => s + c.gold, 0);
     if (lowCount >= 4 || totalGold < 20) {
       const dlg = pick(MKT_DLG_COLLAPSE)(randChar);
       anomalies.push({ type: 'collapse', text: `💬 ${dlg}` });
+      gs.world._lastMarketDlgDay = gs.day;
     }
   }
 
-  // Black market activation
+  // Black market activation (7일마다 1번)
   if (gs.settings.blackMarket && gs.world.threatLevel > 60) {
     const hasRogueOrNecro = gs.characters.some(c => c.class === 'rogue' || c.class === 'necromancer');
     if (hasRogueOrNecro) {
       if (gs.market['forbidden_material']) gs.market['forbidden_material'].demandIndex += 5;
-      const dlg = pick(MKT_DLG_BLACKMARKET)(randChar);
-      anomalies.push({ type: 'blackmarket', text: `🕵 ${dlg}` });
+      if (!gs.world._lastBlackMktDlgDay) gs.world._lastBlackMktDlgDay = 0;
+      if ((gs.day - gs.world._lastBlackMktDlgDay) >= 7) {
+        const dlg = pick(MKT_DLG_BLACKMARKET)(randChar);
+        anomalies.push({ type: 'blackmarket', text: `🕵 ${dlg}` });
+        gs.world._lastBlackMktDlgDay = gs.day;
+      }
     }
   }
 
-  // Dumping: monster material oversupply
+  // Dumping: monster material oversupply (7일마다)
   if (gs.market['monster_material'] && gs.market['monster_material'].supplyIndex > 250) {
-    const dlg = pick(MKT_DLG_DUMPING)(randChar, gs.market['monster_material'].name);
-    anomalies.push({ type: 'dumping', text: `💬 ${dlg}` });
+    if (!gs.world._lastDumpingDlgDay) gs.world._lastDumpingDlgDay = 0;
+    if ((gs.day - gs.world._lastDumpingDlgDay) >= 7) {
+      const dlg = pick(MKT_DLG_DUMPING)(randChar, gs.market['monster_material'].name);
+      anomalies.push({ type: 'dumping', text: `💬 ${dlg}` });
+      gs.world._lastDumpingDlgDay = gs.day;
+    }
   }
 
   return anomalies;

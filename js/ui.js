@@ -33,9 +33,11 @@ function renderChoiceQueue(gs) {
   }
   const choice = gs.pendingChoices[0];
   const isAnnounce = choice.type === 'guild_announce';
+  const isSupplyQuest = isAnnounce && choice.isQuestScroll;
+  const bannerIcon = isSupplyQuest ? '📦' : isAnnounce ? '📜' : '⚠';
   queueEl.innerHTML = `
     <div class="choice-pending-banner${isAnnounce ? ' announce' : ''}" onclick="openChoiceModal()">
-      ${isAnnounce ? '📜' : '⚠'} <strong>${choice.title || '선택 대기 중'}</strong>
+      ${bannerIcon} <strong>${choice.title || '선택 대기 중'}</strong>
       ${gs.pendingChoices.length > 1 ? `<span style="margin-left:4px;opacity:.7">(+${gs.pendingChoices.length-1})</span>` : ''}
       <span style="margin-left:6px;font-size:11px;opacity:.8">클릭하여 결정하기 →</span>
     </div>
