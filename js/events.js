@@ -20,11 +20,34 @@ function eun(n) { return josa(n, '는', '은'); }   // 는(no batchim)/은(batch
 function ul(n)  { return josa(n, '를', '을'); }   // 를/을
 function ro(n)  { return josa(n, '로', '으로'); } // 로/으로
 
-// ── Event success roll — 장비 보너스 포함 ──
+// ── Event success roll — 장비·스킬 레벨 보너스 포함 ──
 function roll(char, statKey) {
   const base = char.stats[statKey] || 0;
   const equip = char._equipBonuses?.[statKey] || 0;
-  const statVal = base + equip;
+
+  // Skill level bonus: class primary action must match roll stat's action type
+  // e.g. warrior (combat) gets bonus on STR rolls; mage (magic) on INT rolls
+  let skillBonus = 0;
+  if (char.class && char.skillLevels && Object.keys(char.skillLevels).length > 0) {
+    const classAction = SKILL_ACTION_MAP[char.class];
+    const rollAction  = STAT_ACTION_MAP[statKey];
+    if (classAction && classAction === rollAction) {
+      const levels = Object.values(char.skillLevels);
+      const avgLevel = levels.reduce((a, b) => a + b, 0) / levels.length;
+      skillBonus = Math.floor((avgLevel - 1) * 2); // +2 per average skill level above 1
+    }
+  }
+
+  // MP bonus/penalty for magic-class stats (INT, FAI)
+  let mpBonus = 0;
+  if (char.class && CLASSES[char.class]?.mpActive && (statKey === 'int' || statKey === 'fai')) {
+    const mpPct = (char.mp || 0) / Math.max(1, char.maxMp || 1);
+    if (mpPct >= 0.7)      mpBonus = 12;   // 70%+ MP → 보너스
+    else if (mpPct >= 0.3) mpBonus = 0;    // 30-70% → 중립
+    else                   mpBonus = -18;  // 30% 미만 → 패널티 (마력 고갈)
+  }
+
+  const statVal = base + equip + skillBonus + mpBonus;
   const fatigueDebt = Math.floor(char.fatigue / 20);
   return randInt(1, 100) + statVal * 5 - fatigueDebt * 5;
 }
@@ -306,8 +329,8 @@ const EVENT_POOL = [
       const tiredness = ['등이 땅에 닿자마자 잠들었다','폭신한 풀밭에 쓰러져 쉬었다','냇가에 발을 담그며 피로를 풀었다'];
       return {
         logClass: 'log-system',
-        text: `${char.name}이(가) 오랜 모험 끝에 잠시 쉬기로 했다. ${pick(tiredness)}. (피로 -25, Sanity +10)`,
-        effects: fx({ fatigue: -25, sanity: 10, exp: 3 }),
+        text: `${char.name}이(가) 오랜 모험 끝에 잠시 쉬기로 했다. ${pick(tiredness)}. (피로 -25, 이성 +4)`,
+        effects: fx({ fatigue: -25, sanity: 4, exp: 3 }),
         addAction: {},
       };
     },
@@ -322,7 +345,7 @@ const EVENT_POOL = [
     resolve(char, gs) {
       return {
         logClass: 'log-system',
-        text: `${char.name}이(가) 탐험 중 길을 잃고 말았다. 이틀을 헤맨 끝에 간신히 돌아왔다. (피로 +20, Sanity -5)`,
+        text: `${char.name}이(가) 탐험 중 길을 잃고 말았다. 이틀을 헤맨 끝에 간신히 돌아왔다. (피로 +20, 이성 -5)`,
         effects: fx({ fatigue: 20, sanity: -5, exp: 5 }),
         addAction: { survival: 1 },
       };
@@ -492,8 +515,8 @@ const EVENT_POOL = [
       const donate = Math.floor(char.gold * 0.1);
       return {
         logClass: 'log-economy',
-        text: `${char.name}이(가) 가난한 이들에게 ${donate}G를 기부했다. 사람들의 감사가 마음을 따뜻하게 했다. (Sanity +10)`,
-        effects: fx({ gold: -donate, sanity: 10, exp: 8 }),
+        text: `${char.name}이(가) 가난한 이들에게 ${donate}G를 기부했다. 사람들의 감사가 마음을 따뜻하게 했다. (이성 +5)`,
+        effects: fx({ gold: -donate, sanity: 5, exp: 8 }),
         addAction: { faith: 1 },
         worldThreatDelta: -1,
       };
@@ -539,7 +562,7 @@ const EVENT_POOL = [
         logClass: 'log-class',
         text: success
           ? `${char.name}이(가) 마법 연구 끝에 ${spell} 술식을 완성했다! 마력이 크게 증폭됐다. (EXP +15, MP 활성화)`
-          : `${char.name}이(가) 밤새 마법 연구를 했지만 실패했다. (피로 +15, Sanity -5)`,
+          : `${char.name}이(가) 밤새 마법 연구를 했지만 실패했다. (피로 +15, 이성 -5)`,
         effects: fx({ exp: success ? 15 : 3, fatigue: success ? 8 : 15, sanity: success ? 0 : -5, mp: success ? 10 : 0 }),
         supply: { magic_stone: -2 },
         statGrow: success ? { int: 0.1 } : null,
@@ -560,9 +583,9 @@ const EVENT_POOL = [
       return {
         logClass: 'log-class',
         text: success
-          ? `${char.name}이(가) 새벽 기도를 드리고 신성한 축복을 받았다. 오늘 하루 모든 판정에 가호가 깃든 느낌이다. (Sanity +15, EXP +10)`
-          : `${char.name}이(가) 기도를 올렸지만 신의 응답이 없었다. (Sanity -5)`,
-        effects: fx({ sanity: success ? 15 : -5, exp: success ? 10 : 0, hp: success ? 10 : 0 }),
+          ? `${char.name}이(가) 새벽 기도를 드리고 신성한 축복을 받았다. 오늘 하루 모든 판정에 가호가 깃든 느낌이다. (이성 +8, EXP +10)`
+          : `${char.name}이(가) 기도를 올렸지만 신의 응답이 없었다. (이성 -5)`,
+        effects: fx({ sanity: success ? 8 : -5, exp: success ? 10 : 0, hp: success ? 10 : 0 }),
         addAction: { faith: 1 },
       };
     },
@@ -624,8 +647,8 @@ const EVENT_POOL = [
       return {
         logClass: 'log-class',
         text: success
-          ? `${char.name}이(가) 달빛 아래 금지된 의식을 치렀다. 죽음의 기운이 주변에 서렸다. (EXP +20, Sanity -10)`
-          : `${char.name}이(가) 의식 중 역술사의 저항을 받아 실패했다. (HP -${randInt(10,20)}, Sanity -15)`,
+          ? `${char.name}이(가) 달빛 아래 금지된 의식을 치렀다. 죽음의 기운이 주변에 서렸다. (EXP +20, 이성 -10)`
+          : `${char.name}이(가) 의식 중 역술사의 저항을 받아 실패했다. (HP -${randInt(10,20)}, 이성 -15)`,
         effects: fx({ exp: success ? 20 : 3, sanity: success ? -10 : -15, hp: success ? 0 : -randInt(10,20), mp: success ? 15 : 0 }),
         supply: { forbidden_material: success ? 1 : 0 },
         addAction: { magic: 1 },
@@ -645,7 +668,7 @@ const EVENT_POOL = [
       return {
         logClass: 'log-class',
         text: `${char.name}이(가) 빛의 신전에서 기도를 올렸다. 신성한 빛이 온몸을 감싸며 상태이상이 해제됐다. (HP 회복, 저주 해제)`,
-        effects: fx({ hp: 20, sanity: 15, fatigue: -15 }),
+        effects: fx({ hp: 20, sanity: 8, fatigue: -15 }),
         removeAllStatus: true,
         addAction: { faith: 1 },
         worldThreatDelta: -2,
@@ -664,11 +687,11 @@ const EVENT_POOL = [
     conditions: { notDead: true },
     resolve(char, gs) {
       const cost = randInt(10, 30);
-      const sanityGain = randInt(10, 20);
+      const sanityGain = randInt(4, 8);
       const activities = ['맥주를 마시며 여행자들과 담소했다','카드 게임에서 이겼다','흥미로운 소문을 들었다','음유시인의 노래를 감상했다'];
       return {
         logClass: 'log-social',
-        text: `${char.name}이(가) 선술집에 들렀다. ${pick(activities)}. (${cost}G 지출, Sanity +${sanityGain})`,
+        text: `${char.name}이(가) 선술집에 들렀다. ${pick(activities)}. (${cost}G 지출, 이성 +${sanityGain})`,
         effects: fx({ gold: -cost, sanity: sanityGain, fatigue: -10, exp: 3 }),
         addAction: { social: 1 },
       };
@@ -683,9 +706,9 @@ const EVENT_POOL = [
     conditions: { notDead: true },
     resolve(char, gs) {
       const outcomes = [
-        { t: '길 잃은 아이를 집으로 데려다줬다. 아이의 부모가 감사의 표시로 금화를 건넸다.', gold: randInt(10,30), sanity: 10 },
-        { t: '무거운 짐을 나르는 노인을 도왔다. 노인이 고맙다며 오래된 약초를 줬다.', gold: 0, sanity: 8 },
-        { t: '다친 여행자를 치료해줬다. 여행자가 고마워하며 유용한 정보를 알려줬다.', gold: 0, sanity: 12, exp: 8 },
+        { t: '길 잃은 아이를 집으로 데려다줬다. 아이의 부모가 감사의 표시로 금화를 건넸다.', gold: randInt(10,30), sanity: 5 },
+        { t: '무거운 짐을 나르는 노인을 도왔다. 노인이 고맙다며 오래된 약초를 줬다.', gold: 0, sanity: 4 },
+        { t: '다친 여행자를 치료해줬다. 여행자가 고마워하며 유용한 정보를 알려줬다.', gold: 0, sanity: 6, exp: 8 },
       ];
       const o = pick(outcomes);
       return {
@@ -731,8 +754,8 @@ const EVENT_POOL = [
       return {
         logClass: 'log-social',
         text: success
-          ? `${char.name}이(가) 시장에서 상인과 분쟁이 생겼다. 뛰어난 말솜씨로 상황을 정리했다. (Sanity +5)`
-          : `${char.name}이(가) 시장에서 상인과 언쟁을 벌였다. 결국 손해를 보고 물러났다. (Sanity -8, Gold -${randInt(5,20)})`,
+          ? `${char.name}이(가) 시장에서 상인과 분쟁이 생겼다. 뛰어난 말솜씨로 상황을 정리했다. (이성 +5)`
+          : `${char.name}이(가) 시장에서 상인과 언쟁을 벌였다. 결국 손해를 보고 물러났다. (이성 -8, Gold -${randInt(5,20)})`,
         effects: fx({ sanity: success ? 5 : -8, gold: success ? 0 : -randInt(5,20), exp: 5 }),
         addAction: { social: 1 },
       };
@@ -750,8 +773,8 @@ const EVENT_POOL = [
       const subject = pick(subjects);
       return {
         logClass: 'log-social',
-        text: `${char.name}이(가) 노련한 선배 모험가에게서 ${subject}에 대한 조언을 들었다. 많은 것을 배웠다. (EXP +15, Sanity +8)`,
-        effects: fx({ exp: 15, sanity: 8, fatigue: 5 }),
+        text: `${char.name}이(가) 노련한 선배 모험가에게서 ${subject}에 대한 조언을 들었다. 많은 것을 배웠다. (EXP +15, 이성 +4)`,
+        effects: fx({ exp: 15, sanity: 4, fatigue: 5 }),
         addAction: { social: 1 },
       };
     },
@@ -789,7 +812,7 @@ const EVENT_POOL = [
       return {
         logClass: 'log-status',
         text: `${char.name}이(가) 마을 현자에게 ${cost}G를 지불하고 저주를 해제받았다. 몸이 한결 가벼워졌다.`,
-        effects: fx({ sanity: 10 }),
+        effects: fx({ sanity: 5 }),
         removeStatus: 'curse',
       };
     },
@@ -844,12 +867,12 @@ const EVENT_POOL = [
     type: 'status',
     weight: 6,
     logClass: 'log-status',
-    conditions: { notDead: true, maxSanity: 60 },
+    conditions: { notDead: true, max이성: 50 },
     resolve(char, gs) {
       return {
         logClass: 'log-status',
-        text: `${char.name}이(가) 심신이 지쳐가는 것을 느끼고 며칠 휴양을 취했다. 정신이 한결 안정됐다. (Sanity +20, 피로 -15)`,
-        effects: fx({ sanity: 20, fatigue: -15, gold: -randInt(15,25) }),
+        text: `${char.name}이(가) 심신이 지쳐가는 것을 느끼고 며칠 휴양을 취했다. 정신이 한결 안정됐다. (이성 +10, 피로 -15)`,
+        effects: fx({ sanity: 10, fatigue: -15, gold: -randInt(15,25) }),
         addAction: {},
       };
     },
@@ -883,7 +906,7 @@ const EVENT_POOL = [
       if (r >= 45) {
         return {
           logClass: 'log-status',
-          text: `${char.name}이(가) 두려움을 이겨냈다! 강인한 의지로 공포를 극복했다. [공포 해제] (Sanity +10)`,
+          text: `${char.name}이(가) 두려움을 이겨냈다! 강인한 의지로 공포를 극복했다. [공포 해제] (이성 +10)`,
           effects: fx({ sanity: 10 }),
           removeStatus: 'fear',
           addAction: {},
@@ -891,7 +914,7 @@ const EVENT_POOL = [
       }
       return {
         logClass: 'log-status',
-        text: `${char.name}은(는) 아직 두려움에서 벗어나지 못했다. (Sanity -5)`,
+        text: `${char.name}은(는) 아직 두려움에서 벗어나지 못했다. (이성 -5)`,
         effects: fx({ sanity: -5 }),
         addAction: {},
       };
@@ -940,7 +963,7 @@ const EVENT_POOL = [
       return {
         logClass: 'log-world',
         text: `[세계 이벤트] ${pick(events)} 세계 위협도가 소폭 하락했다.`,
-        effects: fx({ sanity: 5 }),
+        effects: fx({ sanity: 3 }),
         worldThreatDelta: -randInt(2, 5),
         addAction: {},
       };
@@ -976,8 +999,8 @@ const EVENT_POOL = [
     resolve(char, gs) {
       return {
         logClass: 'log-world',
-        text: `[세계 이벤트] 왕국 수확제가 열렸다! 마을 곳곳에 축제 분위기가 넘쳤다. 시장 거래가 활발해졌다. (Sanity +10)`,
-        effects: fx({ sanity: 10, gold: randInt(10, 30) }),
+        text: `[세계 이벤트] 왕국 수확제가 열렸다! 마을 곳곳에 축제 분위기가 넘쳤다. 시장 거래가 활발해졌다. (이성 +5)`,
+        effects: fx({ sanity: 5, gold: randInt(10, 30) }),
         supply: { travel_food: 25 },
         addAction: {},
       };
@@ -1083,7 +1106,7 @@ const EVENT_POOL = [
       ];
       return {
         logClass: 'log-system',
-        text: `${char.name}이(가) 궁핍한 나날을 보냈다. ${pick(struggles)} (HP -5, Sanity -5)`,
+        text: `${char.name}이(가) 궁핍한 나날을 보냈다. ${pick(struggles)} (HP -5, 이성 -5)`,
         effects: fx({ hp: -5, sanity: -5, exp: 3 }),
         addAction: {},
       };
@@ -1106,7 +1129,7 @@ const EVENT_POOL = [
       return {
         logClass: 'log-system',
         text: `[행운] ${char.name}에게 작은 기적이 일어났다! ${pick(miracles)}`,
-        effects: fx({ gold: goldGain, sanity: 10, exp: 5 }),
+        effects: fx({ gold: goldGain, sanity: 5, exp: 5 }),
         addAction: {},
       };
     },
@@ -1149,7 +1172,7 @@ const EVENT_POOL = [
   {
     id: 'gather_crystal',
     type: 'magic',
-    weight: 3,
+    weight: 6,
     logClass: 'log-survival',
     conditions: { minStats: { int: 3 } },
     resolve(char, gs) {
@@ -1160,6 +1183,71 @@ const EVENT_POOL = [
         baseResource: { magic_crystal: amt },
         addAction: { magic: 1 },
         statGrow: { int: 0.1 },
+      };
+    },
+  },
+
+  // ─── 전직 사전 경험 이벤트 (클래스 없이도 전문 경험치 축적 가능) ───
+
+  // ① 야간 정찰 — 도적 전직 경로 (stealth 경험)
+  {
+    id: 'night_recon',
+    type: 'exploration',
+    weight: 5,
+    logClass: 'log-system',
+    conditions: { notDead: true, minStats: { agi: 4 }, maxFatigue: 75 },
+    resolve(char, gs) {
+      const success = roll(char, 'agi') >= 45;
+      const goldGain = success ? randInt(20, 60) : 0;
+      return {
+        logClass: 'log-system',
+        text: success
+          ? `${char.name}이(가) 야간에 적 진영을 정찰해 ${goldGain}G 상당의 정보를 수집했다. (EXP +12)`
+          : `${char.name}이(가) 야간 정찰을 시도했으나 경비에게 들켜 빈손으로 돌아왔다. (피로 +8)`,
+        effects: fx({ gold: goldGain, exp: success ? 12 : 3, fatigue: success ? 6 : 8 }),
+        addAction: { stealth: 1 },
+      };
+    },
+  },
+
+  // ② 행상인 거래 — 상인 전직 경로 (trade 경험)
+  {
+    id: 'peddler_trade',
+    type: 'economy',
+    weight: 5,
+    logClass: 'log-economy',
+    conditions: { notDead: true, minStats: { cha: 3 }, minGold: 30 },
+    resolve(char, gs) {
+      const success = roll(char, 'cha') >= 40;
+      const goldGain = success ? randInt(15, 50) : -randInt(5, 20);
+      return {
+        logClass: 'log-economy',
+        text: success
+          ? `${char.name}이(가) 행상인에게서 물건을 사서 더 비싸게 팔았다. +${goldGain}G 이익. (EXP +8)`
+          : `${char.name}이(가) 물건 거래를 시도했으나 손해를 봤다. (${goldGain}G)`,
+        effects: fx({ gold: goldGain, exp: success ? 8 : 3, fatigue: 4 }),
+        addAction: { trade: 1 },
+      };
+    },
+  },
+
+  // ③ 마력 감지 훈련 — 마법사 전직 경로 (magic 경험, weight 상향)
+  {
+    id: 'mana_sense_train',
+    type: 'magic',
+    weight: 5,
+    logClass: 'log-system',
+    conditions: { notDead: true, minStats: { int: 3 }, maxFatigue: 80 },
+    resolve(char, gs) {
+      const success = roll(char, 'int') >= 40;
+      return {
+        logClass: 'log-system',
+        text: success
+          ? `${char.name}이(가) 마력의 흐름을 감지하는 훈련을 했다. 마나 감각이 예민해졌다. (EXP +10, INT +0.1)`
+          : `${char.name}이(가) 마력 훈련을 했지만 집중에 실패했다. 피로만 쌓였다. (피로 +10)`,
+        effects: fx({ exp: success ? 10 : 2, fatigue: success ? 5 : 10 }),
+        addAction: { magic: 1 },
+        statGrow: success ? { int: 0.1 } : null,
       };
     },
   },
@@ -1181,6 +1269,394 @@ const EVENT_POOL = [
   },
 
   // ────────────────────────────────────────
+  // CLASS-SPECIFIC SPECIAL EVENTS (~12)
+  // conditions.class filters to those classes only
+  // ────────────────────────────────────────
+
+  // ── 전사: 토너먼트 참가 ───────────────────
+  {
+    id: 'warrior_tournament',
+    type: 'combat',
+    weight: 4,
+    conditions: { notDead: true, class: ['warrior','knight'] },
+    resolve(char, gs) {
+      const win = roll(char, 'str') >= 60;
+      if (win) {
+        const prize = randInt(100, 250);
+        char.gold += prize;
+        char.actionCounts.combat = (char.actionCounts.combat||0) + 3;
+        return { logClass: 'log-class', text: `🏆 ${char.name}이(가) 지역 무술 토너먼트에서 우승했다! 상금 ${prize}G와 명성을 얻었다.`, effects: { exp: 15 } };
+      } else {
+        char.hp = Math.max(1, char.hp - randInt(10, 20));
+        return { logClass: 'log-class', text: `🥊 ${char.name}이(가) 토너먼트에 참가했지만 결승에서 탈락했다. 좋은 경험이 됐다. (HP -10~20)`, effects: { exp: 8 } };
+      }
+    },
+  },
+
+  // ── 마법사: 마법 실험 ────────────────────
+  {
+    id: 'mage_experiment',
+    type: 'magic',
+    weight: 4,
+    conditions: { notDead: true, class: ['mage','sage','necromancer'] },
+    resolve(char, gs) {
+      const success = roll(char, 'int') >= 55;
+      if (success) {
+        const bonus = pick(['str','int','fai','agi','cha','end']);
+        char.stats[bonus] = Math.min(10, (char.stats[bonus]||0) + 1);
+        return { logClass: 'log-class', text: `🔬 ${char.name}이(가) 새 마법 이론을 실험했다. 예상치 못한 결과로 ${STAT_DEF[bonus].name} 스탯이 강화됐다!`, effects: { exp: 20 } };
+      } else {
+        const dmg = randInt(5, 20);
+        char.hp = Math.max(1, char.hp - dmg);
+        char.sanity = Math.max(0, char.sanity - 5);
+        return { logClass: 'log-class', text: `💥 ${char.name}의 마법 실험이 폭주했다! 심각한 역류가 발생했다. (HP -${dmg}, 이성 -5)` };
+      }
+    },
+  },
+
+  // ── 성직자: 기적의 치유 ──────────────────
+  {
+    id: 'cleric_miracle',
+    type: 'faith',
+    weight: 4,
+    conditions: { notDead: true, class: ['cleric','paladin'] },
+    resolve(char, gs) {
+      const blessed = roll(char, 'fai') >= 55;
+      if (blessed) {
+        // Heal all other chars slightly
+        const healed = gs.characters.filter(c => !c.isDead && c.id !== char.id);
+        healed.forEach(c => { c.hp = Math.min(c.maxHp, c.hp + 15); c.sanity = Math.min(100, c.sanity + 4); });
+        return { logClass: 'log-class', text: `✨ ${char.name}이(가) 신에게 기도하여 기적을 일으켰다! 길드원 전원이 치유됐다. (HP +15, 이성 +4)`, effects: { exp: 15 } };
+      } else {
+        char.hp = Math.min(char.maxHp, char.hp + 20);
+        return { logClass: 'log-class', text: `🙏 ${char.name}이(가) 신성한 의식을 올렸다. 조용한 은혜를 받았다. (HP +20)`, effects: { exp: 5 } };
+      }
+    },
+  },
+
+  // ── 도적: 뒷골목 작전 ───────────────────
+  {
+    id: 'rogue_heist',
+    type: 'stealth',
+    weight: 4,
+    conditions: { notDead: true, class: ['rogue'] },
+    resolve(char, gs) {
+      const success = roll(char, 'agi') >= 55;
+      if (success) {
+        const loot = randInt(80, 200);
+        char.gold += loot;
+        gs.world.threatLevel = Math.min(100, gs.world.threatLevel + 2);
+        return { logClass: 'log-class', text: `🗡 ${char.name}이(가) 뒷골목에서 비밀 작전을 수행했다. ${loot}G를 손에 넣었다. (위협도 +2)`, effects: { exp: 12 } };
+      } else {
+        char.hp = Math.max(1, char.hp - randInt(8, 18));
+        gs.world.threatLevel = Math.min(100, gs.world.threatLevel + 4);
+        return { logClass: 'log-class', text: `⚠ ${char.name}이(가) 뒷골목 작전 중 경비대에게 발각됐다! 겨우 도망쳤다. (HP 손실, 위협도 +4)` };
+      }
+    },
+  },
+
+  // ── 바드: 감동 공연 ──────────────────────
+  {
+    id: 'bard_performance',
+    type: 'social',
+    weight: 4,
+    conditions: { notDead: true, class: ['bard'] },
+    resolve(char, gs) {
+      const applause = roll(char, 'cha') >= 50;
+      if (applause) {
+        const tips = randInt(50, 150);
+        char.gold += tips;
+        // Boost affection with everyone in guild
+        gs.characters.filter(c => !c.isDead && c.id !== char.id).forEach(c => {
+          updateAffection(char, c, 1, gs);   // +5 → +1, 쌍방 적용
+        });
+        return { logClass: 'log-class', text: `🎵 ${char.name}의 공연이 마을 광장을 가득 채웠다! 팁 ${tips}G를 받았고 길드원들의 기분이 좋아졌다. (호감도 +1)`, effects: { exp: 10 } };
+      } else {
+        char.gold += randInt(10, 30);
+        return { logClass: 'log-class', text: `🎵 ${char.name}이(가) 작은 주점에서 공연했다. 박수는 없었지만 약간의 수입이 생겼다.`, effects: { exp: 4 } };
+      }
+    },
+  },
+
+  // ── 레인저: 희귀 야수 포획 ───────────────
+  {
+    id: 'ranger_beast_hunt',
+    type: 'survival',
+    weight: 4,
+    conditions: { notDead: true, class: ['ranger','druid'] },
+    resolve(char, gs) {
+      const found = roll(char, 'agi') >= 52;
+      if (found) {
+        const reward = randInt(60, 150);
+        char.gold += reward;
+        gs.world.baseResources.monster_material = (gs.world.baseResources.monster_material||0) + 15;
+        return { logClass: 'log-class', text: `🏹 ${char.name}이(가) 희귀 야수를 추적해 포획했다! 소재 +15, ${reward}G의 현상금을 받았다.`, effects: { exp: 15 } };
+      } else {
+        char.fatigue = Math.min(100, char.fatigue + 20);
+        return { logClass: 'log-class', text: `🏹 ${char.name}이(가) 야수를 종일 추적했지만 놓쳤다. 극도로 지쳐 귀환했다. (피로 +20)`, effects: { exp: 5 } };
+      }
+    },
+  },
+
+  // ── 상인: 대규모 거래 ───────────────────
+  {
+    id: 'merchant_big_deal',
+    type: 'trade',
+    weight: 4,
+    conditions: { notDead: true, class: ['merchant'] },
+    resolve(char, gs) {
+      const chaRoll = roll(char, 'cha');
+      if (chaRoll >= 60) {
+        const profit = randInt(150, 400);
+        char.gold += profit;
+        gs.world.totalGoldCirculated = (gs.world.totalGoldCirculated||0) + profit;
+        return { logClass: 'log-class', text: `💰 ${char.name}이(가) 원거리 상단과 대규모 계약을 체결했다! ${profit}G의 순이익을 올렸다.`, effects: { exp: 18 } };
+      } else if (chaRoll >= 40) {
+        const profit = randInt(40, 120);
+        char.gold += profit;
+        return { logClass: 'log-class', text: `📦 ${char.name}이(가) 중간 규모의 거래를 성사시켰다. ${profit}G를 벌었다.`, effects: { exp: 8 } };
+      } else {
+        const loss = randInt(20, 80);
+        char.gold = Math.max(0, char.gold - loss);
+        return { logClass: 'log-class', text: `📉 ${char.name}의 거래가 협상 실패로 손해를 봤다. (-${loss}G)` };
+      }
+    },
+  },
+
+  // ── 세이지: 고대 지식 발굴 ──────────────
+  {
+    id: 'sage_discovery',
+    type: 'magic',
+    weight: 4,
+    conditions: { notDead: true, class: ['sage'] },
+    resolve(char, gs) {
+      const insight = roll(char, 'int') >= 55;
+      if (insight) {
+        // All chars get EXP from knowledge
+        gs.characters.filter(c => !c.isDead).forEach(c => { c.exp = (c.exp||0) + 8; });
+        return { logClass: 'log-class', text: `📚 ${char.name}이(가) 고대 서고에서 잊혀진 지식을 발굴했다! 길드원 모두가 혜택을 받았다. (전원 EXP +8)`, effects: { exp: 20 } };
+      } else {
+        return { logClass: 'log-class', text: `📚 ${char.name}이(가) 며칠째 서고에서 연구 중이다. 아직 뚜렷한 성과는 없지만 지식이 쌓인다.`, effects: { exp: 10 } };
+      }
+    },
+  },
+
+  // ── 드루이드: 자연의 의식 ───────────────
+  {
+    id: 'druid_ritual',
+    type: 'survival',
+    weight: 4,
+    conditions: { notDead: true, class: ['druid'] },
+    resolve(char, gs) {
+      const attuned = roll(char, 'fai') >= 50;
+      if (attuned) {
+        char.hp = char.maxHp;
+        char.fatigue = Math.max(0, char.fatigue - 40);
+        char.sanity = Math.min(100, char.sanity + 8);
+        gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 2);
+        return { logClass: 'log-class', text: `🌿 ${char.name}이(가) 숲 속 성지에서 자연의 의식을 수행했다. 자연과 하나가 되며 완전히 회복됐다. (HP 전회복, 위협도 -2)`, effects: { exp: 12 } };
+      } else {
+        char.hp = Math.min(char.maxHp, char.hp + 25);
+        return { logClass: 'log-class', text: `🌿 ${char.name}이(가) 새벽 숲에서 명상했다. 마음이 차분해졌다. (HP +25)`, effects: { exp: 6 } };
+      }
+    },
+  },
+
+  // ── 성기사: 신성한 결투 선언 ────────────
+  {
+    id: 'paladin_divine_duel',
+    type: 'combat',
+    weight: 4,
+    conditions: { notDead: true, class: ['paladin'] },
+    resolve(char, gs) {
+      const blessed = roll(char, 'str') >= 55 && roll(char, 'fai') >= 50;
+      if (blessed) {
+        gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 5);
+        char.hp = Math.min(char.maxHp, char.hp + 20);
+        return { logClass: 'log-class', text: `⚔✨ ${char.name}이(가) 신의 이름으로 악의 수장에게 결투를 선언했다! 신성한 승리를 거뒀다. (위협도 -5, HP +20)`, effects: { exp: 25 } };
+      } else {
+        char.hp = Math.max(1, char.hp - randInt(10, 25));
+        return { logClass: 'log-class', text: `⚔ ${char.name}이(가) 악의 세력과 치열하게 싸웠다. 상처를 입었지만 신념은 흔들리지 않았다. (HP 손실)`, effects: { exp: 12 } };
+      }
+    },
+  },
+
+  // ── 네크로맨서: 금지된 의식 ────────────
+  {
+    id: 'necromancer_dark_ritual',
+    type: 'magic',
+    weight: 4,
+    conditions: { notDead: true, class: ['necromancer'] },
+    resolve(char, gs) {
+      const controlled = roll(char, 'int') >= 58;
+      if (controlled) {
+        char.stats.int = Math.min(10, (char.stats.int||0) + 1);
+        char.sanity = Math.max(0, char.sanity - 10);
+        gs.world.threatLevel = Math.min(100, gs.world.threatLevel + 3);
+        return { logClass: 'log-class', text: `💀 ${char.name}이(가) 금지된 의식을 성공시켰다. 강력한 힘을 얻었지만 이성이 흔들린다. (INT +1, 이성 -10, 위협도 +3)`, effects: { exp: 20 } };
+      } else {
+        char.hp = Math.max(1, char.hp - randInt(15, 35));
+        char.sanity = Math.max(0, char.sanity - 15);
+        gs.world.threatLevel = Math.min(100, gs.world.threatLevel + 5);
+        return { logClass: 'log-class', text: `☠ ${char.name}의 의식이 통제를 벗어났다! 언데드가 폭주해 심각한 피해를 입었다. (HP 대손실, 이성 -15, 위협도 +5)` };
+      }
+    },
+  },
+
+  // ── 기사: 귀족 결투 ─────────────────────
+  {
+    id: 'knight_noble_duel',
+    type: 'combat',
+    weight: 4,
+    conditions: { notDead: true, class: ['knight'] },
+    resolve(char, gs) {
+      const honorWin = roll(char, 'str') >= 60;
+      if (honorWin) {
+        const bounty = randInt(100, 200);
+        char.gold += bounty;
+        char.stats.cha = Math.min(10, (char.stats.cha||0) + 1);
+        return { logClass: 'log-class', text: `🛡 ${char.name}이(가) 귀족의 결투 신청을 받아들여 명예롭게 승리했다! 상금 ${bounty}G와 사회적 명성을 얻었다. (CHA +1)`, effects: { exp: 18 } };
+      } else {
+        char.hp = Math.max(1, char.hp - randInt(10, 20));
+        char.gold = Math.max(0, char.gold - randInt(30, 80));
+        return { logClass: 'log-class', text: `🛡 ${char.name}이(가) 결투에서 패배했다. 명예와 약간의 금화를 잃었다. (HP 손실, 골드 감소)`, effects: { exp: 8 } };
+      }
+    },
+  },
+
+  // ────────────────────────────────────────
+  // 6-2: CLASS-SPECIFIC BLACK MARKET EVENTS
+  // ────────────────────────────────────────
+  {
+    id: 'rogue_poison_craft',
+    type: 'class',
+    weight: 4,
+    logClass: 'log-class',
+    conditions: { notDead: true, class: ['rogue'], blackMarketRequired: true },
+    resolve(char, gs) {
+      const r = roll(char, 'agi');
+      if (r >= 55) {
+        char.inventory = char.inventory || [];
+        char.inventory.push({ id: 'antidote', name: '해독제', icon: '🧪', cat: 'consumable', qty: 2 });
+        return { logClass: 'log-class', text: `[암시장] ${char.name}이(가) 독 제조 기술로 해독제를 만들어 암거래했다. 재고 2개 확보.`, effects: fx({ exp: 15, gold: 40 }), supply: { antidote: 3 }, addAction: { stealth: 1 } };
+      } else {
+        return { logClass: 'log-class', text: `[암시장] ${char.name}이(가) 독 제조에 실패해 손가락을 다쳤다. (HP -8)`, effects: fx({ hp: -8, exp: 5 }) };
+      }
+    },
+  },
+  {
+    id: 'rogue_merchant_steal',
+    type: 'class',
+    weight: 3,
+    logClass: 'log-class',
+    conditions: { notDead: true, class: ['rogue'], blackMarketRequired: true },
+    resolve(char, gs) {
+      const r = roll(char, 'agi');
+      if (r >= 60) {
+        const loot = randInt(60, 150);
+        return { logClass: 'log-class', text: `[암시장] ${char.name}이(가) 상인 수레에서 ${loot}G 상당의 물건을 빼돌렸다. 아무도 눈치채지 못했다.`, effects: fx({ gold: loot, exp: 12 }), supply: { monster_material: 5 }, worldThreatDelta: 1, addAction: { stealth: 1 } };
+      } else {
+        const penalty = randInt(20, 60);
+        return { logClass: 'log-class', text: `[암시장] ${char.name}이(가) 절도에 실패해 물건을 모두 내놔야 했다. (-${penalty}G, 이성 -5)`, effects: fx({ gold: -penalty, san: -5, exp: 5 }) };
+      }
+    },
+  },
+  {
+    id: 'necromancer_soul_harvest',
+    type: 'class',
+    weight: 4,
+    logClass: 'log-class',
+    conditions: { notDead: true, class: ['necromancer'], blackMarketRequired: true },
+    resolve(char, gs) {
+      char.inventory = char.inventory || [];
+      char.inventory.push({ id: 'forbidden_material', name: '봉인된 마력 결정', icon: '🔮', cat: 'loot', qty: 1 });
+      return {
+        logClass: 'log-class',
+        text: `[금제 의식] ${char.name}이(가) 전장의 잔해에서 봉인된 마력 결정을 수확했다. 이성이 갉아먹혔다.`,
+        effects: fx({ san: -8, exp: 20 }),
+        supply: { forbidden_material: 2 },
+        addAction: { magic: 1 },
+        worldThreatDelta: 3,
+      };
+    },
+  },
+  {
+    id: 'necromancer_forbidden_rite',
+    type: 'class',
+    weight: 3,
+    logClass: 'log-class',
+    conditions: { notDead: true, class: ['necromancer'], sanity: [0, 70] },
+    resolve(char, gs) {
+      const r = roll(char, 'int');
+      if (r >= 60) {
+        const mpBonus = 20;
+        char.mp = Math.min(char.maxMp || 100, (char.mp || 0) + mpBonus);
+        return { logClass: 'log-class', text: `[금제 의식] ${char.name}이(가) 금지된 의식을 치러 어둠의 마력을 흡수했다. (MP +${mpBonus}, 이성 -10)`, effects: fx({ san: -10, exp: 25 }), addAction: { magic: 2 } };
+      } else {
+        return { logClass: 'log-class', text: `[금제 의식] ${char.name}이(가) 통제 실패로 역반사를 받았다. (HP -15, 이성 -15)`, effects: fx({ hp: -15, san: -15, exp: 8 }) };
+      }
+    },
+  },
+
+  // ────────────────────────────────────────
+  // 6-3: EVENTS YIELDING RARE/ARTIFACT/FORBIDDEN MATERIALS
+  // ────────────────────────────────────────
+  {
+    id: 'rare_material_find',
+    type: 'adventure',
+    weight: 3,
+    logClass: 'log-special',
+    conditions: { notDead: true, baseLevel: [2, 4] },
+    resolve(char, gs) {
+      const options = [
+        { id: 'magic_crystal', name: '마법 결정', icon: '💎', cat: 'loot' },
+        { id: 'dragon_scale',  name: '드래곤 비늘', icon: '🐉', cat: 'loot' },
+      ];
+      const mat = options[Math.floor(Math.random() * options.length)];
+      char.inventory = char.inventory || [];
+      char.inventory.push({ ...mat, qty: 1 });
+      return {
+        logClass: 'log-special',
+        text: `[희귀 발견] ${char.name}이(가) 탐험 중 ${mat.icon}${mat.name}을(를) 발견했다! 시장에서 높은 값을 받을 수 있을 것이다.`,
+        effects: fx({ exp: 20, fatigue: 8 }),
+      };
+    },
+  },
+  {
+    id: 'ancient_artifact_discovery',
+    type: 'adventure',
+    weight: 2,
+    logClass: 'log-special',
+    conditions: { notDead: true, baseLevel: [3, 4] },
+    resolve(char, gs) {
+      char.inventory = char.inventory || [];
+      char.inventory.push({ id: 'ancient_artifact', name: '고대 유물', icon: '🏺', cat: 'loot', qty: 1 });
+      return {
+        logClass: 'log-special',
+        text: `[고대 유물] ${char.name}이(가) 봉인된 유적에서 고대 유물을 발굴했다! 학술원에 팔거나 연구에 활용할 수 있다.`,
+        effects: fx({ exp: 30, sanity: -5 }),
+      };
+    },
+  },
+  {
+    id: 'forbidden_tome_event',
+    type: 'adventure',
+    weight: 2,
+    logClass: 'log-special',
+    conditions: { notDead: true, class: ['mage','sage','necromancer','cleric'], baseLevel: [2, 4] },
+    resolve(char, gs) {
+      const r = roll(char, 'int');
+      if (r >= 55) {
+        char.inventory = char.inventory || [];
+        char.inventory.push({ id: 'forbidden_material', name: '봉인된 마력 결정', icon: '🔮', cat: 'loot', qty: 1 });
+        return { logClass: 'log-special', text: `[금지된 지식] ${char.name}이(가) 금서에서 봉인된 마력을 추출했다. 지식은 힘이지만 대가가 따른다. (이성 -8)`, effects: fx({ san: -8, exp: 35 }), supply: { forbidden_material: 1 } };
+      } else {
+        return { logClass: 'log-special', text: `[금지된 지식] ${char.name}이(가) 금서를 읽다가 봉인이 역발동했다. 정신이 흔들렸다. (이성 -15, HP -10)`, effects: fx({ san: -15, hp: -10, exp: 10 }) };
+      }
+    },
+  },
+
+  // ────────────────────────────────────────
   // RELATIONSHIP EVENTS (pair events)
   // These are called with two characters
   // ────────────────────────────────────────
@@ -1188,15 +1664,27 @@ const EVENT_POOL = [
 ];
 
 // ─── INTERACTION EVENTS (between 2 chars) ─
+// ── 호감도 설계 기준 ──
+// - 자연 감소: -0.6/일 (game.js processAffectionDecay)
+// - 긍정 이벤트 delta 소형화 (+1~2), 부정 이벤트 명확화 (-3~10)
+// - 무관심(ignore) weight 최고 → 대부분의 하루는 그냥 지나간다
+// - 목표: 특정 페어가 꾸준히 help 해야 200일+ 걸려서 lover 가능
+// - weighted pick은 game.js weightedPick() 으로 처리됨
 const INTERACTION_EVENTS = [
   {
     id: 'interact_help',
-    weight: 10,
+    weight: 10,  // 빈도 증가
     resolve(a, b, gs) {
-      const afDelta = randInt(5, 15);
+      const afDelta = randInt(4, 7);  // +4~7 (was +1~2)
+      const acts = [
+        `${a.name}이(가) ${b.name}의 임무를 묵묵히 도왔다`,
+        `${a.name}이(가) 지친 ${b.name}을(를) 대신해 일을 처리해줬다`,
+        `${a.name}이(가) ${b.name}에게 필요한 정보를 먼저 알려줬다`,
+        `${a.name}이(가) ${b.name}이(가) 힘들 때 곁에 있어줬다`,
+      ];
       return {
         logClass: 'log-social',
-        text: `${a.name}이(가) ${b.name}을(를) 도왔다. 두 사람의 유대가 깊어졌다. (호감도 +${afDelta})`,
+        text: `${pick(acts)}. 신뢰가 쌓였다. (호감도 +${afDelta})`,
         affectionDelta: afDelta,
       };
     },
@@ -1205,22 +1693,21 @@ const INTERACTION_EVENTS = [
     id: 'interact_spar',
     weight: 7,
     resolve(a, b, gs) {
-      const afDelta = randInt(-3, 10);
+      const afDelta = randInt(-1, 2);
       return {
         logClass: 'log-social',
-        text: `${a.name}과(와) ${b.name}이(가) 훈련 중 스파링을 했다. ${afDelta >= 0 ? '서로를 인정하게 됐다.' : '약간의 갈등이 생겼다.'}`,
+        text: `${a.name}과(와) ${b.name}이(가) 훈련 중 스파링을 했다. ${afDelta >= 0 ? '서로의 실력을 인정했다.' : '지쳐서 사이가 서먹해졌다.'}${afDelta !== 0 ? ` (호감도 ${afDelta > 0 ? '+' : ''}${afDelta})` : ''}`,
         affectionDelta: afDelta,
       };
     },
   },
   {
     id: 'interact_trade',
-    weight: 2, // 6 → 2, 빈도 대폭 감소
-    // a가 여유 있고 b가 실제로 금화가 부족할 때만 발동
+    weight: 2,
     condition: (a, b) => a.gold >= 120 && b.gold < 50,
     resolve(a, b, gs) {
       const goldAmount = randInt(10, 40);
-      const afDelta = randInt(5, 12);
+      const afDelta = randInt(3, 6);
       return {
         logClass: 'log-economy',
         text: `${a.name}이(가) 금화가 부족한 ${b.name}에게 ${goldAmount}G를 빌려줬다. (호감도 +${afDelta})`,
@@ -1231,52 +1718,96 @@ const INTERACTION_EVENTS = [
   },
   {
     id: 'interact_conflict',
-    weight: 4,
+    weight: 5,
     resolve(a, b, gs) {
-      const afDelta = -randInt(5, 20);
-      const reasons = ['의견 충돌로','생활 방식 차이로','사소한 오해로','금전 문제로'];
+      const afDelta = -randInt(3, 7);
+      const reasons = ['의견 충돌로','생활 방식 차이로','사소한 오해로','금전 문제로','자존심 문제로','지난 일을 꺼내며','임무 방식 차이로','성격 차이로'];
+      const outcomes = [
+        '둘 사이가 서먹해졌다','관계에 금이 가기 시작했다','미운 감정이 쌓였다',
+        '사이가 냉랭해졌다','갈등이 깊어졌다','마음이 멀어졌다',
+        '서로 등을 돌렸다','불편한 침묵이 흘렀다',
+      ];
       return {
         logClass: 'log-social',
-        text: `${a.name}과(와) ${b.name}이(가) ${pick(reasons)} 다퉜다. 사이가 소원해졌다. (호감도 ${afDelta})`,
+        text: `${a.name}과(와) ${b.name}이(가) ${pick(reasons)} 다퉜다. ${pick(outcomes)}. (호감도 ${afDelta})`,
         affectionDelta: afDelta,
       };
     },
   },
   {
-    id: 'interact_secret',
-    weight: 5,
+    id: 'interact_ignore',
+    weight: 9,   // 16 → 9 (무관심 빈도 감소)
     resolve(a, b, gs) {
-      const afDelta = randInt(10, 20);
       return {
         logClass: 'log-social',
-        text: `${a.name}이(가) ${b.name}에게 마음속 깊은 비밀을 털어놓았다. 두 사람의 신뢰가 크게 깊어졌다. (호감도 +${afDelta})`,
+        text: `${a.name}과(와) ${b.name}이(가) 같은 공간에 있었지만 서로 말 한마디 없이 하루를 보냈다.`,
+        affectionDelta: 0,  // 무관심은 패널티 없음
+      };
+    },
+  },
+  {
+    id: 'interact_secret',
+    weight: 2,
+    resolve(a, b, gs) {
+      const afDelta = randInt(6, 10);  // +6~10 (was +2~4)
+      const secrets = [
+        `${a.name}이(가) ${b.name}에게 마음속 깊은 비밀을 털어놓았다`,
+        `${a.name}이(가) 아무에게도 말하지 않았던 과거를 ${b.name}에게 처음 이야기했다`,
+        `${a.name}이(가) ${b.name}에게만 자신의 진짜 꿈을 말해줬다`,
+      ];
+      return {
+        logClass: 'log-social',
+        text: `${pick(secrets)}. 두 사람의 신뢰가 깊어졌다. (호감도 +${afDelta})`,
+        affectionDelta: afDelta,
+      };
+    },
+  },
+  {
+    id: 'interact_heartfelt',   // 새 이벤트: 진심 어린 대화 (호감도 > 30 이상일 때)
+    weight: 3,
+    condition: (a, b) => (getRelationship(a, b.id)?.affection || 0) >= 30,
+    resolve(a, b, gs) {
+      const afDelta = randInt(7, 13);
+      const moments = [
+        `${a.name}이(가) ${b.name}에게 진심 어린 고마움을 전했다`,
+        `${a.name}과(와) ${b.name}이(가) 밤새 서로의 이야기를 나눴다`,
+        `${a.name}이(가) ${b.name}의 고민을 들어주며 함께 답을 찾았다`,
+        `${a.name}이(가) 위기 속에서 ${b.name}을(를) 믿고 등을 맡겼다`,
+      ];
+      return {
+        logClass: 'log-relation',
+        text: `${pick(moments)}. 둘의 유대가 한층 깊어졌다. (호감도 +${afDelta})`,
         affectionDelta: afDelta,
       };
     },
   },
   {
     id: 'interact_romance',
-    weight: 3,
+    weight: 5,   // 3 → 5
     romanceOnly: true,
     resolve(a, b, gs) {
-      const afDelta = randInt(8, 18);
-      const moments = ['달빛 아래 함께 걸으며 시간을 보냈다','서로의 꿈을 이야기하며 밤을 보냈다','위기의 순간 서로를 지켜줬다'];
+      const afDelta = randInt(5, 10);  // +5~10 (was +1~4)
+      const moments = [
+        '달빛 아래 함께 걷다 손이 닿았다','서로의 꿈을 속삭이며 밤을 보냈다',
+        '위기의 순간 서로를 지켜줬다','말없이 곁에 있어 주는 것만으로 충분했다',
+        '우연히 눈이 마주쳐 한참을 그 자리에 서 있었다',
+      ];
       return {
         logClass: 'log-relation',
-        text: `${a.name}과(와) ${b.name}이(가) ${pick(moments)}. 마음이 더욱 가까워졌다. (호감도 +${afDelta})`,
+        text: `${a.name}과(와) ${b.name}이(가) ${pick(moments)}. (호감도 +${afDelta})`,
         affectionDelta: afDelta,
       };
     },
   },
   {
     id: 'interact_party_form',
-    weight: 5,
+    weight: 4,
     partyFormCheck: true,
     resolve(a, b, gs) {
       return {
         logClass: 'log-party',
         text: `${a.name}과(와) ${b.name}이(가) 파티를 결성했다! 함께라면 더 강해질 수 있다.`,
-        affectionDelta: 5,
+        affectionDelta: 3,
         formParty: true,
       };
     },
@@ -1285,14 +1816,19 @@ const INTERACTION_EVENTS = [
 
 // ── Class promotion check ─────────────────
 function checkClassPromotion(char) {
-  if (char.class) return null;
+  // 재전직: 이미 클래스가 있으면 더 높은 기준으로만 다른 클래스 허용
+  const isReclass = !!char.class;
+  const statBoost  = isReclass ? 2 : 0;   // 재전직은 최소 스탯 +2 필요
+  const actionMult = isReclass ? 1.8 : 1; // 재전직은 액션 카운트 1.8배 필요
+
   for (const [classId, classDef] of Object.entries(CLASSES)) {
+    if (classId === char.class) continue; // 현재 직업은 제외
     const cond = classDef.conditions;
     let passed = true;
 
     if (cond.minStats) {
       for (const [stat, min] of Object.entries(cond.minStats)) {
-        if ((char.stats[stat] || 0) < min) { passed = false; break; }
+        if ((char.stats[stat] || 0) < min + statBoost) { passed = false; break; }
       }
     }
     if (!passed) continue;
@@ -1301,7 +1837,7 @@ function checkClassPromotion(char) {
 
     if (cond.minActions) {
       for (const [act, min] of Object.entries(cond.minActions)) {
-        if ((char.actionCounts[act] || 0) < min) { passed = false; break; }
+        if ((char.actionCounts[act] || 0) < Math.ceil(min * actionMult)) { passed = false; break; }
       }
     }
     if (!passed) continue;
@@ -1324,13 +1860,14 @@ function computeChaBonus(char) {
 
 // ── Pick a random event for a character ──
 function pickEvent(char, gs) {
+  if (!char._eventHistory) char._eventHistory = {};
   const eligible = EVENT_POOL.filter(ev => {
     const c = ev.conditions || {};
     if (c.notDead && char.isDead) return false;
     if (c.minFatigue !== undefined && char.fatigue < c.minFatigue) return false;
     if (c.maxFatigue !== undefined && char.fatigue > c.maxFatigue) return false;
-    if (c.minSanity !== undefined && char.sanity < c.minSanity) return false;
-    if (c.maxSanity !== undefined && char.sanity > c.maxSanity) return false;
+    if (c.min이성 !== undefined && char.sanity < c.min이성) return false;
+    if (c.max이성 !== undefined && char.sanity > c.max이성) return false;
     if (c.minGold !== undefined && char.gold < c.minGold) return false;
     if (c.maxGold !== undefined && char.gold > c.maxGold) return false;
     if (c.minExp !== undefined && char.exp < c.minExp) return false;
@@ -1352,6 +1889,12 @@ function pickEvent(char, gs) {
       if (gs.world.baseLevel < mn || gs.world.baseLevel > mx) return false;
     }
     if (c.blackMarketRequired && !gs.settings.blackMarket) return false;
+
+    // ── 반복 방지 쿨다운: weight가 높을수록 짧고, 희귀할수록 길다 ──
+    const cooldown = ev.weight >= 10 ? 12 : ev.weight >= 6 ? 22 : ev.weight >= 3 ? 40 : 70;
+    const lastUsed = char._eventHistory[ev.id] || 0;
+    if (gs.day - lastUsed < cooldown) return false;
+
     return true;
   });
 
@@ -1370,11 +1913,27 @@ function pickEvent(char, gs) {
     }
   }
 
-  // weighted random
-  const totalWeight = eligible.reduce((s, e) => s + e.weight, 0);
+  // ── Alignment-based weight adjustments ──────────────────────────────
+  // Dark  → combat/stealth events up, faith/social events down
+  // Light → faith/social/rest events up, combat/dark events slightly down
+  // Neutral → no change
+  const ALIGN_WEIGHT = {
+    Dark:    { combat:1.6, stealth:1.5, magic:1.2, faith:0.4, social:0.5, rest:0.7, trade:0.8, survival:1.0 },
+    Light:   { faith:1.7, social:1.5, rest:1.3, trade:1.1, magic:1.0, survival:1.0, stealth:0.6, combat:0.7 },
+    Neutral: {},
+  };
+  const aMult = ALIGN_WEIGHT[char.alignment] || {};
+
+  // weighted random (with alignment multiplier)
+  const weightOf = (ev) => {
+    const base = ev.weight;
+    const mult = aMult[ev.type] ?? 1.0;
+    return base * mult;
+  };
+  const totalWeight = eligible.reduce((s, e) => s + weightOf(e), 0);
   let r = Math.random() * totalWeight;
   for (const ev of eligible) {
-    r -= ev.weight;
+    r -= weightOf(ev);
     if (r <= 0) return ev;
   }
   return eligible[eligible.length - 1];
