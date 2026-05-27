@@ -423,11 +423,6 @@ let marketNews = '';
 function renderMarketPanel(gs) {
   const content = document.getElementById('right-panel-content');
 
-  const anomalies = Object.entries(gs.market)
-    .filter(([, item]) => item.supplyIndex < 15 && !['rare','artifact','forbidden'].includes(item.cat))
-    .map(([, item]) => `⚠ ${item.name} 품귀`)
-    .join(' · ');
-
   const categories = {
     consumable: '🧪 소모품',
     food: '🍞 식료품',
@@ -480,7 +475,6 @@ function renderMarketPanel(gs) {
 
   let html = `
     <div class="market-news">${marketNews || '📊 시장은 오늘도 활발하게 돌아가고 있다.'}</div>
-    ${anomalies ? `<div class="market-anomaly">⚠ ${anomalies}</div>` : ''}
     ${rareOfferHtml}
   `;
 
@@ -594,10 +588,18 @@ function buildInventorySection(char, gs) {
       }).join('')
     : '<span class="text-muted" style="font-size:12px">인벤토리 비어 있음</span>';
 
-  // ── 스킬 UI: 일반 스킬 3개 + 침공 스킬 1개 — 모두 동일한 팝업 스타일 ──
-  const raidSk = typeof RAID_SKILL_TABLE !== 'undefined' && char.class ? RAID_SKILL_TABLE[char.class] : null;
+  // ── 스킬 UI: 일반 스킬 3개 + 침공 스킬 1개 — 모두 동일한 팝업 스타일 + 레벨 표시 ──
+  // 기존 캐릭터 호환: classSkills에 침공 스킬이 없으면 RAID_SKILL_TABLE에서 보충
+  const _raidSkDef = typeof RAID_SKILL_TABLE !== 'undefined' && char.class ? RAID_SKILL_TABLE[char.class] : null;
+  const _hasRaidInCS = (char.classSkills || []).some(sk => typeof sk === 'object' && sk.isRaid);
+  const displaySkills = [
+    ...(char.classSkills || []),
+    ...(!_hasRaidInCS && _raidSkDef
+      ? [{ name: _raidSkDef.name, mpCost: _raidSkDef.mpCost, effect: _raidSkDef.effect, isRaid: true }]
+      : []),
+  ];
 
-  // 별 단계 추가 효과 테이블 (SKILL_STAR_EFFECTS와 동기화)
+  // 별 단계 추가 효과 테이블
   const STAR_BONUS_LABELS = {
     2: 'MP -1 감소',
     3: '효과 +15%',
@@ -605,20 +607,17 @@ function buildInventorySection(char, gs) {
     5: 'MP -2 추가 · 효과 +30%',
   };
 
-  // 스킬 팝업 칩 렌더러 (isRaid: 침공 스킬 여부)
+  // 스킬 팝업 칩 렌더러 — 침공/일반 동일 스타일, 모두 레벨 표시
   function _skillChip(name, mpCost, effect, skillKey, isRaid) {
-    const lvl = isRaid ? null : ((char.skillLevels || {})[skillKey] || 1);
-    const stars = lvl ? '★'.repeat(lvl) + '☆'.repeat(5 - lvl) : '';
+    const lvl = (char.skillLevels || {})[skillKey] || 1;
+    const stars = '★'.repeat(lvl) + '☆'.repeat(5 - lvl);
     const typeLabel = isRaid ? '⚔ 침공' : '📖 일반';
-    const chipBg = isRaid
-      ? 'rgba(255,23,68,0.10)' : 'rgba(100,180,255,0.08)';
+    const chipBg     = isRaid ? 'rgba(255,23,68,0.10)' : 'rgba(100,180,255,0.08)';
     const chipBorder = isRaid ? '#ff1744' : '#546e7a';
     const chipColor  = isRaid ? '#ff8a80' : '#b0bec5';
-    // 현재 별 단계 보너스 (Lv.2부터)
-    const starBonusHtml = (lvl && lvl >= 2)
+    const starBonusHtml = lvl >= 2
       ? `<div class="skill-popup-star-bonus">✦ ${STAR_BONUS_LABELS[lvl] || ''}</div>` : '';
-    // 다음 단계 미리보기
-    const nextLvl = lvl && lvl < 5 ? lvl + 1 : null;
+    const nextLvl = lvl < 5 ? lvl + 1 : null;
     const nextBonusHtml = nextLvl
       ? `<div class="skill-popup-next">다음 별: ${STAR_BONUS_LABELS[nextLvl] || ''}</div>` : '';
     return `<div class="skill-popup-chip" style="background:${chipBg};border-color:${chipBorder};color:${chipColor}">
@@ -628,22 +627,18 @@ function buildInventorySection(char, gs) {
         <span class="skill-popup-mp">MP -${mpCost}</span>
       </div>
       <div class="skill-popup-effect">${effect}</div>
-      ${stars ? `<div class="skill-popup-stars">${stars} Lv.${lvl}${starBonusHtml}</div>` : ''}
+      <div class="skill-popup-stars">${stars} Lv.${lvl}${starBonusHtml}</div>
       ${nextBonusHtml}
     </div>`;
   }
 
-  const raidSkHtml = raidSk
-    ? _skillChip(raidSk.name, raidSk.mpCost, raidSk.effect, null, true)
-    : '';
-
-  const skillsHtml = char.classSkills && char.classSkills.length
-    ? char.classSkills.map(sk => {
-        // classSkills는 이제 {name, mpCost, effect} 객체 배열
-        const skName   = (typeof sk === 'object') ? sk.name   : sk;
-        const skMp     = (typeof sk === 'object') ? sk.mpCost : 0;
-        const skEffect = (typeof sk === 'object') ? sk.effect : '—';
-        return _skillChip(skName, skMp, skEffect, skName, false);
+  const skillsHtml = displaySkills.length
+    ? displaySkills.map(sk => {
+        const skName   = typeof sk === 'object' ? sk.name   : sk;
+        const skMp     = typeof sk === 'object' ? sk.mpCost : 0;
+        const skEffect = typeof sk === 'object' ? sk.effect : '—';
+        const skIsRaid = typeof sk === 'object' ? !!sk.isRaid : false;
+        return _skillChip(skName, skMp, skEffect, skName, skIsRaid);
       }).join('')
     : '<span class="text-muted" style="font-size:12px">스킬 없음</span>';
 
@@ -683,7 +678,7 @@ function buildInventorySection(char, gs) {
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${inventoryHtml}</div>
       ${statAllocHtml}
       <div style="margin:4px 0;font-size:11px;color:var(--text-muted)">스킬</div>
-      <div class="skill-popup-grid">${skillsHtml}${raidSkHtml}</div>
+      <div class="skill-popup-grid">${skillsHtml}</div>
       <div style="margin-top:8px;font-size:11px;color:var(--text-muted)">행동 기록</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">
         전투:${char.actionCounts.combat||0} · 마법:${char.actionCounts.magic||0} · 신성:${char.actionCounts.faith||0} · 잠입:${char.actionCounts.stealth||0} · 사교:${char.actionCounts.social||0} · 생존:${char.actionCounts.survival||0} · 교역:${char.actionCounts.trade||0}

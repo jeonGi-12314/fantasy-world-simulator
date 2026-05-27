@@ -128,8 +128,7 @@ async function nextDay() {
     // 9d. Debt repayment
     processDebts(aliveChars, gs, dayLogs);
 
-    // 9e. Skill level growth check (once per day, after all action counts updated)
-    processSkillLevels(aliveChars, gs, dayLogs);
+    // 9e. Skill level growth: now triggered per character level-up (see checkLevelUp)
 
     // 9e-2. Rare/artifact equipment passive effects
     processRareItemPassives(aliveChars, gs, dayLogs);
@@ -499,6 +498,22 @@ function checkLevelUp(char, gs, dayLogs) {
 
     const spMsg = gs.settings.autoStatDistribution ? '' : ` (+3 스탯 포인트 배분 필요!)`;
     dayLogs.push({ logClass: 'log-special', text: `⬆ ${char.name}이(가) Lv.${char.level}로 레벨업!${spMsg}` });
+
+    // 레벨업 시 스킬 1개만 1업 (첫 번째 최대치 미달 스킬)
+    const _allSkills = char.classSkills || [];
+    if (_allSkills.length) {
+      for (const _sk of _allSkills) {
+        const _skName = typeof _sk === 'object' ? _sk.name : _sk;
+        const _skLvl = char.skillLevels[_skName] || 1;
+        if (_skLvl < 5) {
+          char.skillLevels[_skName] = _skLvl + 1;
+          const _stars = '★'.repeat(_skLvl + 1) + '☆'.repeat(5 - (_skLvl + 1));
+          const _bonus = SKILL_STAR_EFFECTS[_skLvl + 1] || '';
+          dayLogs.push({ logClass: 'log-special', text: `✨ ${char.name}의 스킬 [${_skName}]이(가) Lv.${_skLvl + 1} ${_stars}로 성장했다!${_bonus ? ` (+효과: ${_bonus})` : ''}` });
+          break;
+        }
+      }
+    }
   }
   return leveled;
 }
@@ -2857,7 +2872,7 @@ function processInventoryManagement(aliveChars, gs, dayLogs) {
       gs.world.townGold = (gs.world.townGold || 0) + price;
       // 판매 시 해당 카테고리 시장 공급 증가 (tier로 분류해 가장 근접한 시장 아이템 반영)
       if (tDef) {
-        const sellSlotMkt = tDef.slot === 'weapon' ? 'weapon_sword' : tDef.slot === 'armor' ? 'armor_chain' : null;
+        const sellSlotMkt = tDef.slot === 'weapon' ? 'weapon_dark' : tDef.slot === 'armor' ? 'armor_plate' : null;
         if (sellSlotMkt && gs.market[sellSlotMkt]) {
           gs.market[sellSlotMkt].supplyIndex = Math.min(300, gs.market[sellSlotMkt].supplyIndex + 4);
           gs.market[sellSlotMkt].demandIndex = Math.max(5, gs.market[sellSlotMkt].demandIndex - 2);
@@ -2891,18 +2906,18 @@ function processEquipmentPurchases(aliveChars, gs, dayLogs) {
 
       // 직업에 맞는 장비 선택 (클래스별 우선 무기 지정)
       const CLASS_WEAPON_PREF = {
-        warrior:     ['weapon_great_axe', 'weapon_axe', 'weapon_sword'],
-        knight:      ['armor_plate', 'weapon_spear', 'weapon_sword'],
-        mage:        ['weapon_grimoire', 'weapon_staff', 'armor_robe'],
-        sage:        ['weapon_grimoire', 'weapon_staff', 'armor_robe'],
-        necromancer: ['weapon_grimoire', 'weapon_staff', 'armor_robe'],
-        cleric:      ['weapon_holy', 'armor_divine', 'weapon_staff'],
+        warrior:     ['weapon_great_axe', 'armor_plate', 'weapon_dark'],
+        knight:      ['armor_plate', 'weapon_holy', 'armor_divine'],
+        mage:        ['weapon_grimoire', 'armor_robe', 'weapon_dark'],
+        sage:        ['weapon_grimoire', 'armor_robe', 'weapon_holy'],
+        necromancer: ['weapon_grimoire', 'weapon_dark', 'armor_robe'],
+        cleric:      ['weapon_holy', 'armor_divine', 'armor_robe'],
         paladin:     ['weapon_holy', 'armor_plate', 'armor_divine'],
-        rogue:       ['weapon_dark', 'weapon_longbow', 'weapon_dagger', 'armor_shadow'],
-        ranger:      ['weapon_longbow', 'weapon_bow', 'weapon_dark'],
-        druid:       ['weapon_staff', 'weapon_spear', 'armor_robe'],
-        bard:        ['weapon_sword', 'weapon_dark', 'acc_amulet'],
-        merchant:    ['acc_bracer', 'weapon_sword', 'weapon_dark'],
+        rogue:       ['weapon_dark', 'weapon_longbow', 'armor_shadow'],
+        ranger:      ['weapon_longbow', 'weapon_dark', 'armor_shadow'],
+        druid:       ['weapon_grimoire', 'armor_robe', 'weapon_holy'],
+        bard:        ['weapon_dark', 'armor_shadow', 'acc_amulet'],
+        merchant:    ['acc_bracer', 'weapon_dark', 'acc_charm'],
       };
       const prefs = CLASS_WEAPON_PREF[char.class] || [];
 
@@ -2927,7 +2942,7 @@ function processEquipmentPurchases(aliveChars, gs, dayLogs) {
 
       // 시장 반응 헬퍼: 장비 구매 시 카테고리 공급 감소 + 수요 상승
       const _applyEquipBuyMarket = () => {
-        const slotMkt = slot === 'weapon' ? 'weapon_sword' : slot === 'armor' ? 'armor_chain' : null;
+        const slotMkt = slot === 'weapon' ? 'weapon_dark' : slot === 'armor' ? 'armor_plate' : null;
         if (slotMkt && gs.market[slotMkt]) {
           gs.market[slotMkt].supplyIndex = Math.max(1, gs.market[slotMkt].supplyIndex - 5);
           gs.market[slotMkt].demandIndex = Math.min(300, gs.market[slotMkt].demandIndex + 3);
@@ -3192,7 +3207,12 @@ function applyClassPromotion(char, classId, gs) {
   }
 
   char.class = classId;
-  char.classSkills = [...classDef.skills];
+  // 일반 스킬 3개 + 침공 스킬 1개를 동일하게 classSkills에 포함
+  const _invasionSk = RAID_SKILL_TABLE[classId];
+  const _invasionSkObj = _invasionSk
+    ? { name: _invasionSk.name, mpCost: _invasionSk.mpCost, effect: _invasionSk.effect, isRaid: true }
+    : null;
+  char.classSkills = [...classDef.skills, ...(_invasionSkObj ? [_invasionSkObj] : [])];
   for (const [stat, bonus] of Object.entries(classDef.statBonus || {})) {
     char.stats[stat] = Math.min(10, (char.stats[stat] || 0) + bonus);
   }

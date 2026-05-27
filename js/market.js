@@ -70,13 +70,13 @@ function updateDemandFromWorld(gs) {
 
   // High threat → more weapon/armor demand
   if (threat > 40) {
-    if (gs.market['weapon_sword']) gs.market['weapon_sword'].demandIndex += 2;
-    if (gs.market['armor_chain'])  gs.market['armor_chain'].demandIndex += 2;
+    if (gs.market['weapon_dark'])  gs.market['weapon_dark'].demandIndex  += 2;
+    if (gs.market['armor_plate'])  gs.market['armor_plate'].demandIndex  += 2;
   }
   if (threat > 60) {
     gs.market['healing_potion'].demandIndex += 3;
-    if (gs.market['weapon_sword']) gs.market['weapon_sword'].demandIndex += 3;
-    if (gs.market['weapon_dark'])  gs.market['weapon_dark'].demandIndex += 2;
+    if (gs.market['weapon_dark'])  gs.market['weapon_dark'].demandIndex  += 3;
+    if (gs.market['weapon_holy'])  gs.market['weapon_holy'].demandIndex  += 2;
   }
 
   // Many characters injured → potion demand rises
