@@ -554,8 +554,11 @@ h1,h2,h3,h4 { font-weight: 700; }
 /* ─── LOG INLINE COLOR TOKENS ─── */
 /* 이벤트 태그 [..] → 금색 */
 .log-tag { color: #ffd54f; font-weight: 700; font-style: normal; }
-/* 캐릭터 이름 → 청록색 */
-.log-name { color: #4fc3f7; font-weight: 700; font-style: normal; }
+/* 캐릭터 이름 → 성별 색상 (남=파랑, 여=핑크, 기타=보라) */
+.log-name        { color: #4fc3f7; font-weight: 700; font-style: normal; } /* fallback */
+.log-name-male   { color: #64b5f6; font-weight: 700; font-style: normal; }
+.log-name-female { color: #f48fb1; font-weight: 700; font-style: normal; }
+.log-name-other  { color: #ce93d8; font-weight: 700; font-style: normal; }
 /* 양수 변화 +N → 초록 */
 .log-pos  { color: #69f0ae; font-weight: 700; font-style: normal; }
 /* 음수 변화 -N → 빨강 */
@@ -1501,7 +1504,7 @@ input:checked + .toggle-slider::after {
   color: var(--text-muted);
 }
 
-/* Skill level chip */
+/* Skill level chip (legacy fallback) */
 .skill-level-chip {
   display: flex;
   flex-direction: column;
@@ -1515,20 +1518,36 @@ input:checked + .toggle-slider::after {
   cursor: help;
   transition: border-color 0.15s;
 }
-.skill-level-chip:hover {
-  border-color: #ce93d8;
+.skill-chip-name { font-size: 10px; color: var(--text-secondary); text-align: center; line-height: 1.3; }
+.skill-chip-stars { font-size: 10px; color: #ffd700; letter-spacing: 1px; }
+
+/* ── 스킬 팝업 칩 (신규 UI) ── */
+.skill-popup-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 4px;
 }
-.skill-chip-name {
-  font-size: 10px;
-  color: var(--text-secondary);
-  text-align: center;
-  line-height: 1.3;
+.skill-popup-chip {
+  border: 1px solid #546e7a;
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-size: 11px;
+  line-height: 1.4;
+  transition: border-color 0.15s, background 0.15s;
 }
-.skill-chip-stars {
-  font-size: 10px;
-  color: #ffd700;
-  letter-spacing: 1px;
+.skill-popup-chip:hover { filter: brightness(1.1); }
+.skill-popup-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
 }
+.skill-popup-type  { font-size: 9px; opacity: 0.7; white-space: nowrap; }
+.skill-popup-name  { font-weight: 700; font-size: 12px; flex: 1; }
+.skill-popup-mp    { font-size: 10px; color: #80d8ff; white-space: nowrap; }
+.skill-popup-effect { font-size: 10px; opacity: 0.85; line-height: 1.5; }
+.skill-popup-stars { font-size: 10px; color: #ffd700; margin-top: 2px; }
 
 /* ─── ENDING MODAL ─── */
 .ending-content {
@@ -1747,6 +1766,18 @@ input:checked + .toggle-slider::after {
   line-height: 1.6;
   flex: 1;
 }
+.quest-card-risk {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0;
+  padding: 4px 6px;
+  background: rgba(0,0,0,0.25);
+  border-radius: 4px;
+  font-size: 10px;
+}
+.quest-risk-label   { color: #ffe082; font-weight: 600; }
+.quest-penalty-label { color: #ef9a9a; font-size: 9px; }
 .quest-card-footer {
   display: flex;
   gap: 6px;
@@ -1984,6 +2015,28 @@ input:checked + .toggle-slider::after {
 .building-name { font-size: 13px; font-weight: 700; flex: 1; }
 .building-desc { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
 .building-cost { font-size: 10px; margin-top: 4px; }
+
+.building-locked {
+  opacity: 0.7;
+  pointer-events: none;
+  border-color: #37474f;
+  background: rgba(0,0,0,0.15);
+}
+.lock-badge {
+  font-size: 10px;
+  color: #ff8a65;
+  background: rgba(255,87,34,0.12);
+  border: 1px solid rgba(255,87,34,0.3);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+.lock-hint {
+  font-size: 10px;
+  color: #ff8a65;
+  margin-top: 4px;
+  opacity: 0.8;
+}
 
 .disabled-btn {
   opacity: 0.45;

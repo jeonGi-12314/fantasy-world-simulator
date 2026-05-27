@@ -306,11 +306,23 @@ const DLG_DEBT = [
 
 // ─── WORLD THREAT ────────────────────────
 function processWorldThreat(gs, dayLogs) {
-  // Natural increase — 0.05/day (2000-day baseline for pure drift)
-  const naturalIncrease = gs.settings.developerMode ? 0 : 0.05;
-  // 감시탑(watchtower) 건설 시 위협 자연 증가 상쇄
+  if (gs.settings.developerMode) return;
+
+  // 연도별 위협 자연 증가율: 1년차 0.05/일, 2년차부터 급격히 상승
+  const year = Math.floor((gs.day - 1) / 360) + 1;
+  let naturalIncrease = 0.05;
+  if (year >= 2) naturalIncrease = 0.12 + (year - 2) * 0.08; // 2Y:0.12, 3Y:0.20, 4Y:0.28
+  if (year >= 5) naturalIncrease = 0.40; // 상한선
+
+  // 감시탑(watchtower) 건설 시 증가 일부 상쇄
   const towerBonus = gs.world.buildings?.watchtower ? 0.5 : 0;
   gs.world.threatLevel = Math.min(100, Math.max(0, gs.world.threatLevel + naturalIncrease - towerBonus));
+
+  // 2년차 진입 시 경고 (1회만)
+  if (gs.day === 361 && !gs._year2warned) {
+    gs._year2warned = true;
+    dayLogs.push({ logClass: 'log-special', text: `[2년차] 마왕의 힘이 강해지고 있다. 위협의 속도가 빨라졌다. 대비가 필요하다.` });
+  }
 }
 
 // ─── APPLY EVENT RESULT ───────────────────
@@ -525,13 +537,15 @@ function processSkillLevels(aliveChars, gs, dayLogs) {
 
     // 하루에 최대 1개 스킬만 레벨업 (가장 먼저 조건 충족된 스킬)
     for (const skill of char.classSkills) {
-      const currentLevel = char.skillLevels[skill] || 1;
+      // skill은 이제 {name, mpCost, effect} 객체 (또는 하위 호환 문자열)
+      const skName = (typeof skill === 'object') ? skill.name : skill;
+      const currentLevel = char.skillLevels[skName] || 1;
       if (currentLevel >= 5) continue;
-      const threshold = SKILL_THRESHOLDS[currentLevel]; // actions needed for next level
+      const threshold = SKILL_THRESHOLDS[currentLevel];
       if (actionCount >= threshold) {
-        char.skillLevels[skill] = currentLevel + 1;
-        dayLogs.push({ logClass: 'log-special', text: `✨ ${char.name}의 스킬 [${skill}]이(가) Lv.${currentLevel + 1}로 성장했다!` });
-        break; // 하루 1스킬 성장 제한
+        char.skillLevels[skName] = currentLevel + 1;
+        dayLogs.push({ logClass: 'log-special', text: `✨ ${char.name}의 스킬 [${skName}]이(가) Lv.${currentLevel + 1}로 성장했다!` });
+        break;
       }
     }
   }
@@ -691,13 +705,22 @@ function processGuildUpkeep(aliveChars, gs, dayLogs) {
   }
 }
 
-// ─── MP REGENERATION ─────────────────────
-// mpActive 클래스(마법사·현자·팔라딘·네크로맨서) 매일 MP 회복
+// ─── MP REGENERATION & DAILY DRAIN ──────────
+// mpActive 클래스: 매일 회복 + 일상 소모
+// 그 외 직업 보유 클래스: 일상 스킬 훈련으로 소모
 function processMP(aliveChars, dayLogs) {
   for (const char of aliveChars) {
-    if (!char.class || !CLASSES[char.class]?.mpActive) continue;
-    const regen = 10;
-    char.mp = Math.min(char.maxMp, (char.mp || 0) + regen);
+    if (!char.class) continue;
+    const isActive = CLASSES[char.class]?.mpActive;
+    if (isActive) {
+      // 마법 계열: 회복 10, 일상 마법 시전 소모 6 → 순 +4/day
+      char.mp = Math.min(char.maxMp, (char.mp || 0) + 10);
+      char.mp = Math.max(0, char.mp - 6);
+    } else {
+      // 그 외 직업: 일상 훈련·스킬 소모 (3~7 MP/day 랜덤)
+      const drain = 3 + Math.floor(Math.random() * 5);
+      char.mp = Math.max(0, (char.mp || 0) - drain);
+    }
   }
 }
 
@@ -1118,22 +1141,31 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
   const enemyTotal = Math.floor(threat * 4.5);
   let remainingEnemyHP = enemyTotal;
 
+  // ── 침공 전 마나 소모 (전투 집결·준비 과정) ──
+  for (const char of aliveChars) {
+    if (!char.class || !CLASSES[char.class]?.mpActive) continue;
+    const preDrain = Math.floor(char.maxMp * (0.25 + Math.random() * 0.25)); // 25~50% 소모
+    char.mp = Math.max(0, (char.mp || 0) - preDrain);
+  }
+
   dayLogs.push({ logClass: 'log-battle', text: `  [적 전력] ${battleBar(remainingEnemyHP, enemyTotal)} ${remainingEnemyHP}/${enemyTotal}  |  아군 ${aliveChars.length}명 응전` });
 
   let activeFighters = aliveChars.filter(c => !c.isDead);
 
   // ── 최대 3라운드 전투 (적 완파 or 전원 탈락 시 조기 종료) ──
   const MAX_ROUNDS = 3;
+  // 침공 전체에서 스킬을 이미 사용한 캐릭터 추적 (한 침공당 스킬 1회 제한)
+  const usedSkillsThisInvasion = new Set();
   for (let round = 1; round <= MAX_ROUNDS && activeFighters.length > 0 && remainingEnemyHP > 0; round++) {
     dayLogs.push({ logClass: 'log-battle', text: `  ▶ ${round}라운드  [적 잔여: ${battleBar(remainingEnemyHP, enemyTotal)} ${Math.max(0, remainingEnemyHP)}/${enemyTotal}]` });
 
-    // 버프/힐 선계산 (MP 보유 시에만, 클래스별 중복 적용 방지)
+    // 버프/힐 선계산 (MP 보유 시에만, 클래스별 중복 적용 방지 + 이번 침공 미사용자만)
     let buffAll = 0, healAll = 0;
     const buffSources = [], healSources = [];
     const _preUsedClasses = new Set();
     for (const c of activeFighters) {
       const sk = RAID_SKILL_TABLE[c.class];
-      if (!sk || _preUsedClasses.has(c.class)) continue; // 같은 클래스 중복 방지
+      if (!sk || _preUsedClasses.has(c.class) || usedSkillsThisInvasion.has(c.id)) continue;
       _preUsedClasses.add(c.class);
       if (sk.buffAll && c.mp >= sk.mpCost) { buffAll += sk.buffAll; buffSources.push(`${c.name}(+${sk.buffAll})`); }
       if (sk.healAll && c.mp >= sk.mpCost) { healAll += sk.healAll; healSources.push(`${c.name}(+${Math.round(sk.healAll)})`); }
@@ -1143,8 +1175,8 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
     if (buffAll > 0) dayLogs.push({ logClass: 'log-battle', text: `    ♪ 아군 사기 고취! 전원 공격력 +${buffAll}  [${buffSources.join(' · ')}]` });
     if (healAll > 0) dayLogs.push({ logClass: 'log-battle', text: `    ✨ 신성 치유 발동! 전원 HP +${Math.round(healAll)} 회복  [${healSources.join(' · ')}]` });
 
-    // 이번 라운드 사용된 스킬 추적 (클래스별 중복 방지)
-    const usedSkillsThisRound = new Set();
+    // 이번 라운드 내 클래스 중복 방지 (같은 라운드 내 동일 클래스 2인 시)
+    const usedClassesThisRound = new Set();
 
     const nextFighters = [];
     for (const char of activeFighters) {
@@ -1157,19 +1189,24 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
 
       // ── 스킬/무기 결정 ──
       let sk, mpUsed = 0, actionLabel;
-      // 같은 클래스 스킬은 라운드당 1회만 (중복 시 기본 공격으로 폴백)
-      if (classSk && hasMp && !usedSkillsThisRound.has(char.class)) {
-        // 직업 스킬 사용
+      // 스킬 사용 가능 여부: MP 충분 + 이번 침공 미사용 + 이번 라운드 동일 클래스 미사용
+      const canUseSkill = classSk && hasMp
+        && !usedSkillsThisInvasion.has(char.id)
+        && !usedClassesThisRound.has(char.class);
+      if (canUseSkill) {
+        // 직업 스킬 사용 (침공당 1회)
         sk = classSk;
         mpUsed = sk.mpCost;
         char.mp -= mpUsed;
-        usedSkillsThisRound.add(char.class);
+        usedSkillsThisInvasion.add(char.id);
+        usedClassesThisRound.add(char.class);
         actionLabel = `⚡MP -${mpUsed}(잔여:${char.mp})`;
-      } else if (classSk && (!hasMp || usedSkillsThisRound.has(char.class))) {
-        // 직업 있지만 MP 부족 or 이미 동일 클래스 스킬 사용됨 → 기본 타격
+      } else if (classSk) {
+        // 직업 있지만 스킬 재사용 불가 (이미 사용 or MP부족 or 동료 선행) → 기본 타격
         const wpDef = char.equipment?.weapon ? EQUIPMENT_DEFS[char.equipment.weapon.id] : null;
         const wpBonus = wpDef ? (wpDef.bonus.str || 0) + (wpDef.bonus.int || 0) : 0;
-        const _dupReason = hasMp ? '동료 선행 사용' : 'MP부족';
+        const _dupReason = usedSkillsThisInvasion.has(char.id) ? '스킬 사용 완료'
+          : usedClassesThisRound.has(char.class) ? '동료 선행 사용' : 'MP부족';
         sk = { name: char.equipment?.weapon?.name || '맨손', mpCost: 0, atkBonus: 4 + wpBonus, defRed: 0.0, evade: 0,
                flavor: ['필사적으로 버텼다', '쓰러지지 않겠다는 의지로 싸웠다', '직접 몸으로 막아냈다'] };
         actionLabel = `${_dupReason} — ${char.equipment?.weapon?.name || '맨손'}으로 공격`;
@@ -1203,10 +1240,11 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
 
       // 회피 판정
       if (sk.evade && Math.random() < sk.evade) {
+        const remEv = Math.max(0, remainingEnemyHP);
         dayLogs.push({ logClass: 'log-battle', text: `  ${icon} ${char.name}  (${actionLabel})  [${sk.name}]` });
         dayLogs.push({ logClass: 'log-battle', text: `    ↳ ${flavor}` });
-        dayLogs.push({ logClass: 'log-battle', text: `    ✦ 완전 회피! 마왕군 피해 -${charAtk}` });
-        dayLogs.push({ logClass: 'log-battle', text: `    💖 ${char.name} HP [${battleBar(char.hp, char.maxHp)}] (${char.hp}/${char.maxHp})` });
+        dayLogs.push({ logClass: 'log-battle', text: `    ✦ 완전 회피! 마왕군 피해 -${charAtk}  [${battleBar(remEv, enemyTotal)}] ${remEv}/${enemyTotal}` });
+        dayLogs.push({ logClass: 'log-battle', text: `    ${char.name} HP (${char.hp}/${char.maxHp})` });
         nextFighters.push(char);
         continue;
       }
@@ -1215,20 +1253,24 @@ function processSeasonalRaid(aliveChars, gs, dayLogs) {
       char.hp  -= dmg;
       char.fatigue = Math.min(100, char.fatigue + randInt(8, 16));
 
+      const remAtk = Math.max(0, remainingEnemyHP);
       dayLogs.push({ logClass: 'log-battle', text: `  ${icon} ${char.name}  (${actionLabel})  [${sk.name}]` });
       dayLogs.push({ logClass: 'log-battle', text: `    ↳ ${flavor}` });
-      dayLogs.push({ logClass: 'log-battle', text: `    ⚔ 마왕군 피해 -${charAtk}` });
+      dayLogs.push({ logClass: 'log-battle', text: `    ⚔ 마왕군 피해 -${charAtk}  [${battleBar(remAtk, enemyTotal)}] ${remAtk}/${enemyTotal}` });
 
       if (char.hp <= 0) {
         char.hp = 1;
         char.statusEffects = [...new Set([...char.statusEffects, 'exhausted'])];
-        dayLogs.push({ logClass: 'log-battle', text: `    ☠ HP -${dmg} → 중상! 전선 이탈  [${battleBar(1, char.maxHp)}] (1/${char.maxHp})` });
-        if (threat >= 70 && Math.random() < (threat - 65) / 100) {
+        dayLogs.push({ logClass: 'log-battle', text: `    ☠ HP -${dmg} → 중상! 전선 이탈  (1/${char.maxHp})` });
+        const year = Math.floor((gs.day - 1) / 360) + 1;
+        const deathFloor = Math.max(30, 55 - (year - 1) * 8);
+        const deathChance = Math.min(0.85, Math.max(0, (threat - deathFloor) / 60));
+        if (threat >= deathFloor && Math.random() < deathChance) {
           char.isDead = true;
           dayLogs.push({ logClass: 'log-battle', text: `    ☠️ ${char.name}이(가) 전사했다...` });
         }
       } else {
-        dayLogs.push({ logClass: 'log-battle', text: `    💖 ${char.name} HP [${battleBar(char.hp, char.maxHp)}] (${char.hp}/${char.maxHp})` });
+        dayLogs.push({ logClass: 'log-battle', text: `    ${char.name} HP (${char.hp}/${char.maxHp})` });
         nextFighters.push(char);
       }
     }
@@ -1653,22 +1695,25 @@ function processRomance(aliveChars, gs, dayLogs) {
           }
         }
 
-        // 결혼: 연인 일수 기반 확률
-        const daysTogether = char.daysAsLovers?.[partner.id] || 0;
-        const marriageChance = Math.min(0.25, (0.002 + Math.floor(daysTogether / 10) * 0.002) * (gs.settings.storySpeed || 1));
-        if (Math.random() < marriageChance) {
-          rel.type = 'spouse';
-          const pr = getRelationship(partner, char.id);
-          if (pr) pr.type = 'spouse';
-          rel.affection = Math.min(rel.affection + 20, 200);
-          dayLogs.push({ logClass: 'log-romance', text: `💍 ${char.name}과(와) ${partner.name}이(가) 결혼했다! 두 영혼이 하나가 됐다.` });
-          { const g = pick(DLG_MARRIAGE); dayLogs.push(dlgPair(char.name, g[0], partner.name, g[1])); }
+        // 결혼: 연인 상태에서만 가능 (oathbound/spouse는 이미 결혼했거나 맹약 상태)
+        if (rel.type === 'lover') {
+          const daysTogether = char.daysAsLovers?.[partner.id] || 0;
+          const marriageChance = Math.min(0.25, (0.002 + Math.floor(daysTogether / 10) * 0.002) * (gs.settings.storySpeed || 1));
+          if (Math.random() < marriageChance) {
+            rel.type = 'spouse';
+            const pr = getRelationship(partner, char.id);
+            if (pr) pr.type = 'spouse';
+            rel.affection = Math.min(rel.affection + 20, 200);
+            if (pr) pr.affection = Math.min(pr.affection + 20, 200);
+            dayLogs.push({ logClass: 'log-romance', text: `💍 ${char.name}과(와) ${partner.name}이(가) 결혼했다! 두 영혼이 하나가 됐다.` });
+            { const g = pick(DLG_MARRIAGE); dayLogs.push(dlgPair(char.name, g[0], partner.name, g[1])); }
 
-          // 맹약
-          if (gs.settings.oathBondSystem && rel.affection > 80) {
-            addOrUpdateRelation(char, partner.id, 'oathbound', 0);
-            addOrUpdateRelation(partner, char.id, 'oathbound', 0);
-            dayLogs.push({ logClass: 'log-romance', text: `🔮 ${char.name}과(와) ${partner.name}이(가) 맹약(Oath Bond)을 맺었다! 위기의 순간 서로를 자동으로 돕는다.` });
+            // 맹약: spouse 관계에 oathBound 플래그만 추가 (관계 타입 덮어쓰기 금지)
+            if (gs.settings.oathBondSystem && rel.affection > 80) {
+              rel.oathBound = true;
+              if (pr) pr.oathBound = true;
+              dayLogs.push({ logClass: 'log-romance', text: `🔮 ${char.name}과(와) ${partner.name}이(가) 결혼과 동시에 맹약(Oath Bond)을 맺었다!` });
+            }
           }
         }
       }
@@ -1833,7 +1878,7 @@ function formParty(chars, gs, dayLogs) {
 }
 
 // ─── 파티 퀘스트 결과 처리 ────────────────
-function resolvePartyQuest(partyId, rewardType, gs) {
+function resolvePartyQuest(partyId, rewardType, gs, grade = 'C') {
   const party = gs.parties.find(p => p.id === partyId);
   if (!party) return;
   const members = gs.characters.filter(c => party.memberIds.includes(c.id) && !c.isDead);
@@ -1841,8 +1886,24 @@ function resolvePartyQuest(partyId, rewardType, gs) {
 
   const logs = [];
 
+  // ── 등급별 파라미터 ──
+  // successBase: 기본 성공률, goldMul: 보상 배율, penaltyMul: 패널티 배율, threatReduce: 위협도 감소
+  const GRADE_CFG = {
+    S: { successBase: 0.18, goldMul: 4.0, penaltyMul: 2.5, threatReduce: 15, expMul: 4.0, lootChance: 0.90 },
+    A: { successBase: 0.35, goldMul: 2.5, penaltyMul: 1.8, threatReduce: 10, expMul: 2.5, lootChance: 0.75 },
+    B: { successBase: 0.55, goldMul: 1.5, penaltyMul: 1.2, threatReduce: 5,  expMul: 1.5, lootChance: 0.60 },
+    C: { successBase: 0.70, goldMul: 1.0, penaltyMul: 0.8, threatReduce: 3,  expMul: 1.0, lootChance: 0.45 },
+    D: { successBase: 0.95, goldMul: 0.5, penaltyMul: 0.3, threatReduce: 1,  expMul: 0.5, lootChance: 0.20 },
+  };
+  const cfg = GRADE_CFG[grade] || GRADE_CFG['C'];
+
+  // 멤버 평균 스탯으로 성공률 보정 (최대 +25%)
+  const avgStatBonus = members.reduce((s, c) =>
+    s + ((c.stats.str || 0) + (c.stats.int || 0) + (c.level || 1) * 0.5), 0)
+    / members.length * 0.015;
+  const successChance = Math.min(0.92, cfg.successBase + avgStatBonus);
+
   // ── 출발 시 식량 소비 ──
-  // 전투·탐사 의뢰는 식량이 필요. 인벤토리에서 식량 소비 (없으면 골드로 대체)
   const FOOD_IDS = new Set(['travel_food','dried_meat','bread','potato','salt_fish']);
   if (rewardType === 'combat' || rewardType === 'explore') {
     for (const c of members) {
@@ -1853,7 +1914,6 @@ function resolvePartyQuest(partyId, rewardType, gs) {
         if (food.qty <= 0) c.inventory.splice(foodIdx, 1);
         logs.push({ logClass: 'log-system', text: `🍞 ${c.name}이(가) 출발 전 ${food.name}을(를) 챙겼다.` });
       } else {
-        // 식량 없음 — 골드로 구매하거나 피로 증가
         const travelCost = gs.market?.travel_food?.currentPrice || 10;
         if (c.gold >= travelCost) {
           c.gold -= travelCost;
@@ -1867,45 +1927,60 @@ function resolvePartyQuest(partyId, rewardType, gs) {
     }
   }
 
-  const avgStr = members.reduce((s, c) => s + (c.stats.str || 0), 0) / members.length;
-  const success = Math.random() < (0.4 + avgStr * 0.04);
+  const success = Math.random() < successChance;
+  const gradeTag = `[${grade}등급]`;
 
   switch (rewardType) {
     case 'combat': {
       if (success) {
-        const gold = randInt(80, 200) * members.length;
-        const guildCut = Math.floor(gold * 0.1); // 길드 공동 창고 10% 기여
+        const gold = Math.round(randInt(80, 200) * members.length * cfg.goldMul);
+        const guildCut = Math.floor(gold * 0.1);
+        const threatDec = cfg.threatReduce;
         const names = members.map(c => c.name).join(', ');
-        members.forEach(c => { c.gold += Math.floor((gold - guildCut) / members.length); c.actionCounts.combat = (c.actionCounts.combat||0)+2; });
+        members.forEach(c => {
+          c.gold += Math.floor((gold - guildCut) / members.length);
+          c.exp = (c.exp || 0) + Math.round(20 * cfg.expMul);
+          c.actionCounts = c.actionCounts || {};
+          c.actionCounts.combat = (c.actionCounts.combat || 0) + 2;
+        });
         gs.world.townGold = (gs.world.townGold || 0) + guildCut;
-        gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 3);
-        logs.push({ logClass: 'log-party', text: `⚔ 파티 [${names}]이(가) 토벌 의뢰에 성공했다! 금화 ${gold-guildCut}G 분배, 길드 창고 +${guildCut}G. (위협도 -3)` });
-        // 귀환 전리품: 멤버별 몬스터 소재 인벤토리 추가
+        gs.world.threatLevel = Math.max(0, gs.world.threatLevel - threatDec);
+        logs.push({ logClass: 'log-party', text: `⚔ ${gradeTag} 파티 [${names}]이(가) 토벌에 성공했다! 금화 ${gold-guildCut}G 분배, 길드 창고 +${guildCut}G. (위협도 -${threatDec})` });
         for (const c of members) {
-          if (Math.random() < 0.60) {
+          if (Math.random() < cfg.lootChance) {
             c.inventory = c.inventory || [];
-            c.inventory.push({ id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot', qty: 1 });
+            const isRare = grade === 'S' && Math.random() < 0.3;
+            c.inventory.push(isRare
+              ? { id: 'magic_stone', name: '마석', icon: '💎', cat: 'loot', qty: 1 }
+              : { id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot', qty: 1 });
           }
         }
         if (members.length >= 2) { const g = pick(DLG_COMBAT_WIN); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
       } else {
-        members.forEach(c => { c.hp = Math.max(1, c.hp - randInt(10, 25)); });
-        logs.push({ logClass: 'log-party', text: `⚔ 파티가 토벌 의뢰에 실패했다... 모두 부상을 입고 귀환했다.` });
+        const hpLoss = Math.round(randInt(10, 25) * cfg.penaltyMul);
+        const goldLoss = grade === 'S' ? randInt(50, 120) : grade === 'A' ? randInt(20, 60) : 0;
+        members.forEach(c => {
+          c.hp = Math.max(1, c.hp - hpLoss);
+          if (goldLoss) c.gold = Math.max(0, c.gold - goldLoss);
+        });
+        const penaltyDesc = goldLoss ? ` 금화 ${goldLoss}G 손실.` : '';
+        logs.push({ logClass: 'log-party', text: `⚔ ${gradeTag} 파티가 토벌에 실패했다... 부상을 입고 귀환했다. (HP -${hpLoss}${penaltyDesc})` });
         if (members.length >= 2) { const g = pick(DLG_COMBAT_FAIL); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
       }
       break;
     }
     case 'explore': {
       if (success) {
-        const gold = randInt(60, 150) * members.length;
-        members.forEach(c => { c.gold += Math.floor(gold / members.length); c.exp += 10; });
-        gs.world.baseResources.ancient_artifact = (gs.world.baseResources.ancient_artifact||0) + 1;
-        logs.push({ logClass: 'log-party', text: `🗺 파티가 유적 탐험에 성공! 금화 ${gold}G와 고대 유물을 발견했다.` });
-        // 귀환 전리품: 마법석 or 몬스터 소재
+        const gold = Math.round(randInt(60, 150) * members.length * cfg.goldMul);
+        const expGain = Math.round(15 * cfg.expMul);
+        members.forEach(c => { c.gold += Math.floor(gold / members.length); c.exp = (c.exp || 0) + expGain; });
+        if (grade === 'S' || grade === 'A')
+          gs.world.baseResources.ancient_artifact = (gs.world.baseResources.ancient_artifact || 0) + 1;
+        logs.push({ logClass: 'log-party', text: `🗺 ${gradeTag} 파티가 탐험에 성공! 금화 ${gold}G와 귀한 발견물을 가져왔다.` });
         for (const c of members) {
-          if (Math.random() < 0.50) {
+          if (Math.random() < cfg.lootChance) {
             c.inventory = c.inventory || [];
-            const isStone = Math.random() < 0.4;
+            const isStone = Math.random() < (grade === 'S' ? 0.7 : 0.4);
             c.inventory.push(isStone
               ? { id: 'magic_stone', name: '마석', icon: '💎', cat: 'loot', qty: 1 }
               : { id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot', qty: 1 });
@@ -1913,23 +1988,32 @@ function resolvePartyQuest(partyId, rewardType, gs) {
         }
         if (members.length >= 2) { const g = pick(DLG_EXPLORE_WIN); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
       } else {
-        members.forEach(c => { c.hp = Math.max(1, c.hp - randInt(5, 15)); c.fatigue = Math.min(100, c.fatigue + 20); });
-        logs.push({ logClass: 'log-party', text: `🗺 파티가 유적 탐험 중 함정에 빠졌다. 간신히 탈출했다. (피로 +20)` });
+        const hpLoss = Math.round(randInt(5, 15) * cfg.penaltyMul);
+        const fatigueLoss = Math.round(20 * cfg.penaltyMul);
+        members.forEach(c => { c.hp = Math.max(1, c.hp - hpLoss); c.fatigue = Math.min(100, c.fatigue + fatigueLoss); });
+        logs.push({ logClass: 'log-party', text: `🗺 ${gradeTag} 파티가 탐험 중 위기에 처했다. 간신히 귀환했다. (HP -${hpLoss}, 피로 +${fatigueLoss})` });
         if (members.length >= 2) { const g = pick(DLG_EXPLORE_FAIL); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
       }
       break;
     }
     case 'defend': {
-      const gold = randInt(40, 80) * members.length;
-      members.forEach(c => { c.gold += Math.floor(gold / members.length); });
-      gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 5);
-      logs.push({ logClass: 'log-party', text: `🛡 파티가 마을 수호에 나섰다. 금화 ${gold}G를 받고 위협도가 감소했다. (위협도 -5)` });
+      if (success) {
+        const gold = Math.round(randInt(40, 80) * members.length * cfg.goldMul);
+        const threatDec = cfg.threatReduce + 2;
+        members.forEach(c => { c.gold += Math.floor(gold / members.length); });
+        gs.world.threatLevel = Math.max(0, gs.world.threatLevel - threatDec);
+        logs.push({ logClass: 'log-party', text: `🛡 ${gradeTag} 파티가 수호 임무 완료. 금화 ${gold}G 수령, 위협도 -${threatDec}` });
+      } else {
+        const threatInc = Math.round(3 * cfg.penaltyMul);
+        gs.world.threatLevel = Math.min(100, gs.world.threatLevel + threatInc);
+        logs.push({ logClass: 'log-party', text: `🛡 ${gradeTag} 파티가 수호 임무에 실패했다. 방어선이 뚫렸다. (위협도 +${threatInc})` });
+      }
       if (members.length >= 2) { const g = pick(DLG_DEFEND); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
       break;
     }
     case 'rest': {
       members.forEach(c => { c.hp = Math.min(c.maxHp, c.hp + 20); c.fatigue = Math.max(0, c.fatigue - 30); });
-      logs.push({ logClass: 'log-party', text: `💤 파티가 함께 충분히 쉬었다. 모두 체력을 회복했다. (HP +20, 피로 -30)` });
+      logs.push({ logClass: 'log-party', text: `💤 파티가 충분히 쉬었다. 모두 체력을 회복했다. (HP +20, 피로 -30)` });
       if (members.length >= 2) { const g = pick(DLG_REST); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
       break;
     }
@@ -2672,9 +2756,9 @@ function processInventoryManagement(aliveChars, gs, dayLogs) {
 
       char.gold += price;
       gs.world.townGold = (gs.world.townGold || 0) + price;
-      // 판매 시 해당 카테고리 시장 공급 증가
+      // 판매 시 해당 카테고리 시장 공급 증가 (tier로 분류해 가장 근접한 시장 아이템 반영)
       if (tDef) {
-        const sellSlotMkt = tDef.slot === 'weapon' ? 'weapon_basic' : tDef.slot === 'armor' ? 'armor_basic' : null;
+        const sellSlotMkt = tDef.slot === 'weapon' ? 'weapon_sword' : tDef.slot === 'armor' ? 'armor_chain' : null;
         if (sellSlotMkt && gs.market[sellSlotMkt]) {
           gs.market[sellSlotMkt].supplyIndex = Math.min(300, gs.market[sellSlotMkt].supplyIndex + 4);
           gs.market[sellSlotMkt].demandIndex = Math.max(5, gs.market[sellSlotMkt].demandIndex - 2);
@@ -2744,7 +2828,7 @@ function processEquipmentPurchases(aliveChars, gs, dayLogs) {
 
       // 시장 반응 헬퍼: 장비 구매 시 카테고리 공급 감소 + 수요 상승
       const _applyEquipBuyMarket = () => {
-        const slotMkt = slot === 'weapon' ? 'weapon_basic' : slot === 'armor' ? 'armor_basic' : null;
+        const slotMkt = slot === 'weapon' ? 'weapon_sword' : slot === 'armor' ? 'armor_chain' : null;
         if (slotMkt && gs.market[slotMkt]) {
           gs.market[slotMkt].supplyIndex = Math.max(1, gs.market[slotMkt].supplyIndex - 5);
           gs.market[slotMkt].demandIndex = Math.min(300, gs.market[slotMkt].demandIndex + 3);
@@ -2951,7 +3035,12 @@ function showNextPromotion() {
       <div class="class-promo-char">${char.name}이(가) ${isReclass ? '재전직' : '전직'} 조건을 달성했습니다!</div>
       <div class="class-promo-desc">${classDef.desc}</div>
       <div class="class-promo-skills">
-        ${classDef.skills.map(s => `<span class="skill-badge">${s}</span>`).join('')}
+        ${classDef.skills.map(s => {
+          const skName = (typeof s === 'object') ? s.name : s;
+          const skMp   = (typeof s === 'object') ? s.mpCost : 0;
+          const skEff  = (typeof s === 'object') ? s.effect : '';
+          return `<span class="skill-badge" title="MP -${skMp}  ${skEff}">${skName}  <span style="font-size:9px;opacity:0.7">MP${skMp}</span></span>`;
+        }).join('')}
       </div>
       <div class="class-promo-desc" style="margin-top:8px;font-size:12px;color:var(--text-muted)">
         경제 활동: ${classDef.economyRole}
@@ -2968,7 +3057,7 @@ function showNextPromotion() {
     gs.pendingPromotions.shift();
     modal.classList.add('hidden');
     renderAll();
-    const nextDay_log = [{ logClass: 'log-class', text: `⬆ ${char.name}이(가) ${classDef.name}(으)로 전직했다! 새로운 스킬 [${classDef.skills.join(', ')}]을 익혔다.` }];
+    const nextDay_log = [{ logClass: 'log-class', text: `⬆ ${char.name}이(가) ${classDef.name}(으)로 전직했다! 새로운 스킬 [${classDef.skills.map(s => (typeof s === 'object' ? s.name : s)).join(', ')}]을 익혔다.` }];
     appendToLog(nextDay_log);
     saveGame(gs);
     if (gs.pendingPromotions.length > 0) setTimeout(showNextPromotion, 500);

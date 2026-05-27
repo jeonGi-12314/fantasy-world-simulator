@@ -191,11 +191,16 @@ const ALIGNMENTS = {
 };
 
 // ─── CLASSES ──────────────────────────────
+// skills: 각 스킬은 { name, mpCost, effect } 객체
 const CLASSES = {
   warrior: {
     name: '전사', icon: '⚔', mpActive: false,
     conditions: { minStats: { str: 6 }, minActions: { combat: 5 } },
-    skills: ['방어 태세', '도발', '연속 공격'],
+    skills: [
+      { name: '방어 태세', mpCost: 5, effect: 'END +2 임시 강화. 받는 피해 감소.' },
+      { name: '도발',     mpCost: 4, effect: '적의 주의를 끌어 동료를 보호한다.' },
+      { name: '연속 공격', mpCost: 7, effect: 'STR 기반 2연타. 추가 피해 부여.' },
+    ],
     economyRole: '토벌 의뢰 수임, 경비 고용',
     statBonus: { str: 1, end: 1 },
     goldPerDay: [12, 35],
@@ -205,7 +210,11 @@ const CLASSES = {
   mage: {
     name: '마법사', icon: '🔮', mpActive: true,
     conditions: { minStats: { int: 5 }, minActions: { magic: 3 } },
-    skills: ['파이어볼', '마법 감지', '마력 증폭'],
+    skills: [
+      { name: '파이어볼',  mpCost: 15, effect: 'INT 기반 강력한 원거리 화염 공격.' },
+      { name: '마법 감지', mpCost: 5,  effect: '함정·마법·숨겨진 위험 사전 감지.' },
+      { name: '마력 증폭', mpCost: 12, effect: '다음 마법 스킬의 위력 2배 증폭.' },
+    ],
     economyRole: '마법 재료 수요 생성',
     statBonus: { int: 1 },
     goldPerDay: [10, 28],
@@ -215,7 +224,11 @@ const CLASSES = {
   cleric: {
     name: '성직자', icon: '✝', mpActive: false,
     conditions: { minStats: { fai: 6 }, minActions: { faith: 4 } },
-    skills: ['치유의 손길', '언데드 퇴치', '축복'],
+    skills: [
+      { name: '치유의 손길', mpCost: 10, effect: '대상 HP +20 회복. FAI에 비례.' },
+      { name: '언데드 퇴치', mpCost: 12, effect: '언데드·저주 속성 적에 특효 공격.' },
+      { name: '축복',        mpCost: 8,  effect: '팀 전원 이성 +5, 피로 -5.' },
+    ],
     economyRole: '치유 서비스 제공',
     statBonus: { fai: 1, cha: 1 },
     goldPerDay: [10, 32],
@@ -225,7 +238,11 @@ const CLASSES = {
   rogue: {
     name: '도적', icon: '🗡', mpActive: false,
     conditions: { minStats: { agi: 5 }, minActions: { stealth: 3 } },
-    skills: ['잠입', '급소 공격', '함정 해제'],
+    skills: [
+      { name: '잠입',     mpCost: 6, effect: 'AGI 기반 은신. 발각 위험 대폭 감소.' },
+      { name: '급소 공격', mpCost: 8, effect: '적의 급소를 노린 단타. AGI 기반 고피해.' },
+      { name: '함정 해제', mpCost: 4, effect: '탐험 중 함정 감지·무력화.' },
+    ],
     economyRole: '암시장 접근권',
     statBonus: { agi: 1 },
     goldPerDay: [12, 45],
@@ -235,7 +252,11 @@ const CLASSES = {
   knight: {
     name: '기사', icon: '🛡', mpActive: false,
     conditions: { minStats: { str: 5, fai: 5 }, minActions: { combat: 3 } },
-    skills: ['성검', '맹세', '신성 방어'],
+    skills: [
+      { name: '성검 격발', mpCost: 10, effect: 'FAI+STR 기반 신성 공격. 언데드 특효.' },
+      { name: '맹세',      mpCost: 8,  effect: '동료 보호 맹세. 대신 피해를 받을 수 있다.' },
+      { name: '신성 방어', mpCost: 6,  effect: '팀 전원 방어력 일시 상승.' },
+    ],
     economyRole: '귀족 의뢰 수임',
     statBonus: { str: 1, fai: 1 },
     goldPerDay: [22, 55],
@@ -244,7 +265,11 @@ const CLASSES = {
   bard: {
     name: '음유시인', icon: '🎵', mpActive: false,
     conditions: { minStats: { cha: 6 }, minActions: { social: 5 } },
-    skills: ['용기의 노래', '매혹', '이야기꾼'],
+    skills: [
+      { name: '용기의 노래', mpCost: 8,  effect: '팀 전원 공격력 +3, 이성 +3.' },
+      { name: '매혹',        mpCost: 10, effect: 'CHA 기반 적·NPC 매혹. 전투 회피 가능.' },
+      { name: '이야기꾼',    mpCost: 5,  effect: '파티 사기 상승, 피로 -10.' },
+    ],
     economyRole: '공연 수입, 시장 정보 획득',
     statBonus: { cha: 2 },
     goldPerDay: [8, 22],
@@ -254,7 +279,11 @@ const CLASSES = {
   ranger: {
     name: '레인저', icon: '🏹', mpActive: false,
     conditions: { minStats: { agi: 5, end: 5 }, minActions: { survival: 4 } },
-    skills: ['추적', '야영 달인', '정밀 사격'],
+    skills: [
+      { name: '추적',      mpCost: 4, effect: '위험 사전 감지. 매복·기습 회피.' },
+      { name: '야영 달인', mpCost: 3, effect: '야영 시 HP·피로 추가 회복.' },
+      { name: '정밀 사격', mpCost: 9, effect: '원거리 정밀 타격. AGI 기반 고피해.' },
+    ],
     economyRole: '채집 효율 상승',
     statBonus: { agi: 1, end: 1 },
     goldPerDay: [10, 28],
@@ -264,7 +293,11 @@ const CLASSES = {
   druid: {
     name: '드루이드', icon: '🌿', mpActive: false,
     conditions: { minStats: { fai: 3, end: 5 }, minActions: { survival: 4 } },
-    skills: ['자연의 가호', '변신', '식물 치유'],
+    skills: [
+      { name: '자연의 가호', mpCost: 10, effect: '팀 HP 소량 회복 + 피로 감소.' },
+      { name: '변신',        mpCost: 15, effect: '동물로 변신해 정찰·은신 가능.' },
+      { name: '식물 치유',   mpCost: 8,  effect: '약초를 이용한 자연 치유. FAI+END 기반.' },
+    ],
     economyRole: '농산물·약초 생산',
     statBonus: { end: 2 },
     goldPerDay: [7, 20],
@@ -274,7 +307,11 @@ const CLASSES = {
   sage: {
     name: '현자', icon: '📚', mpActive: true,
     conditions: { minStats: { int: 6 }, minActions: { magic: 5 } },
-    skills: ['고대어 해독', '유물 감정', '예언'],
+    skills: [
+      { name: '고대어 해독', mpCost: 5,  effect: '유적 탐험 성공률 상승. 유물 가치 파악.' },
+      { name: '유물 감정',   mpCost: 6,  effect: '유물의 진위·능력을 정확히 판별.' },
+      { name: '예언',        mpCost: 15, effect: '미래의 위험 또는 기회를 예고한다.' },
+    ],
     economyRole: '유물 감정 서비스',
     statBonus: { int: 2 },
     goldPerDay: [18, 45],
@@ -284,7 +321,11 @@ const CLASSES = {
   merchant: {
     name: '상인', icon: '💰', mpActive: false,
     conditions: { minStats: { cha: 5 }, minActions: { trade: 4 } },
-    skills: ['교역', '가격 협상', '밀수'],
+    skills: [
+      { name: '교역',      mpCost: 4, effect: '시장 거래 시 수익 +5% 추가.' },
+      { name: '가격 협상', mpCost: 5, effect: '구매가 -10% / 판매가 +10% 적용.' },
+      { name: '밀수',      mpCost: 8, effect: '금지 재료·희귀품 암거래 접근권.' },
+    ],
     economyRole: '시장 가격에 가장 강한 영향력',
     statBonus: { cha: 2 },
     goldPerDay: [18, 70],
@@ -294,7 +335,11 @@ const CLASSES = {
   paladin: {
     name: '팔라딘', icon: '⚜', mpActive: true,
     conditions: { minStats: { str: 5, fai: 5 }, alignment: 'Light', specialEvent: true },
-    skills: ['성스러운 심판', '치유의 손길', '신성의 보호막'],
+    skills: [
+      { name: '성스러운 심판', mpCost: 10, effect: 'FAI+STR 기반 신성 타격. 암흑 속성 특효.' },
+      { name: '치유의 빛',     mpCost: 10, effect: '대상 HP +25 회복. FAI에 비례.' },
+      { name: '신성의 보호막', mpCost: 8,  effect: '팀 전원 피해 경감. 5라운드 지속.' },
+    ],
     economyRole: '헌금·기부 이벤트',
     statBonus: { str: 1, fai: 1 },
     goldPerDay: [28, 65],
@@ -303,7 +348,11 @@ const CLASSES = {
   necromancer: {
     name: '네크로맨서', icon: '💀', mpActive: true,
     conditions: { minStats: { int: 5 }, minActions: { magic: 4 } },
-    skills: ['언데드 소환', '생명 흡수', '공포의 기운'],
+    skills: [
+      { name: '언데드 소환', mpCost: 18, effect: '언데드를 소환해 전투를 보조한다.' },
+      { name: '생명 흡수',   mpCost: 12, effect: '적의 HP를 흡수해 자신을 회복한다.' },
+      { name: '공포의 기운', mpCost: 10, effect: '적 전체에 공포를 주입. 공격력 감소.' },
+    ],
     economyRole: '암시장 전용 재료 수요',
     statBonus: { int: 1 },
     goldPerDay: [10, 42],
@@ -335,19 +384,27 @@ const MARKET_ITEMS = {
   iron_ore:          { name: '철광석',          cat: 'material',   base: 35,   supply: 150, demand: 100 },
   wolf_pelt:         { name: '늑대 가죽',       cat: 'loot',       base: 55,   supply: 70,  demand: 80 },
   bone_fragment:     { name: '뼛가루',          cat: 'loot',       base: 20,   supply: 90,  demand: 60 },
-  // ── 무기 (이름 있는 장비) ─────────────────
-  weapon_basic:      { name: '기본 무기',       cat: 'equipment',  base: 100,  supply: 100, demand: 80 },
-  longsword_market:  { name: '롱소드',          cat: 'equipment',  base: 180,  supply: 60,  demand: 90 },
-  battle_axe_market: { name: '전투도끼',        cat: 'equipment',  base: 200,  supply: 50,  demand: 80 },
-  mace_market:       { name: '메이스',          cat: 'equipment',  base: 150,  supply: 70,  demand: 85 },
-  dagger_market:     { name: '단검',            cat: 'equipment',  base: 90,   supply: 90,  demand: 100 },
-  spear_market:      { name: '창',              cat: 'equipment',  base: 130,  supply: 75,  demand: 75 },
-  crossbow_market:   { name: '석궁',            cat: 'equipment',  base: 220,  supply: 40,  demand: 70 },
+  // ── 무기 ─────────────────────────────────
+  weapon_dagger:     { name: '단검',            cat: 'equipment',  base: 100,  supply: 90,  demand: 100 },
+  weapon_club:       { name: '철 곤봉',         cat: 'equipment',  base: 90,   supply: 80,  demand: 80 },
+  weapon_wand:       { name: '마법 지팡이(초급)',cat: 'equipment',  base: 110,  supply: 70,  demand: 75 },
+  weapon_sword:      { name: '롱소드',          cat: 'equipment',  base: 220,  supply: 60,  demand: 90 },
+  weapon_axe:        { name: '전투 도끼',       cat: 'equipment',  base: 240,  supply: 50,  demand: 80 },
+  weapon_bow:        { name: '합성궁',          cat: 'equipment',  base: 210,  supply: 55,  demand: 80 },
+  weapon_staff:      { name: '마법 지팡이',     cat: 'equipment',  base: 250,  supply: 45,  demand: 75 },
+  weapon_spear:      { name: '장창',            cat: 'equipment',  base: 225,  supply: 55,  demand: 70 },
+  weapon_dark:       { name: '저주의 검',       cat: 'equipment',  base: 450,  supply: 15,  demand: 60 },
+  weapon_holy:       { name: '성검',            cat: 'equipment',  base: 500,  supply: 10,  demand: 50 },
+  weapon_grimoire:   { name: '마법 대서',       cat: 'equipment',  base: 480,  supply: 12,  demand: 55 },
+  weapon_longbow:    { name: '장궁 엘시아',     cat: 'equipment',  base: 460,  supply: 12,  demand: 55 },
+  weapon_great_axe:  { name: '분노의 대도끼',   cat: 'equipment',  base: 470,  supply: 12,  demand: 50 },
   // ── 갑옷 ──────────────────────────────────
-  armor_basic:       { name: '기본 갑옷',       cat: 'equipment',  base: 120,  supply: 100, demand: 80 },
-  chainmail_market:  { name: '사슬갑옷',        cat: 'equipment',  base: 160,  supply: 65,  demand: 80 },
-  leather_armor_mk:  { name: '가죽 갑옷',       cat: 'equipment',  base: 90,   supply: 90,  demand: 95 },
-  plate_piece_mk:    { name: '판금 흉갑',       cat: 'equipment',  base: 320,  supply: 30,  demand: 60 },
+  armor_leather:     { name: '가죽 갑옷',       cat: 'equipment',  base: 120,  supply: 90,  demand: 95 },
+  armor_robe:        { name: '마법 로브',       cat: 'equipment',  base: 200,  supply: 60,  demand: 80 },
+  armor_shadow:      { name: '그림자 갑옷',     cat: 'equipment',  base: 215,  supply: 50,  demand: 75 },
+  armor_chain:       { name: '사슬 갑옷',       cat: 'equipment',  base: 230,  supply: 65,  demand: 80 },
+  armor_plate:       { name: '판금 갑옷',       cat: 'equipment',  base: 480,  supply: 20,  demand: 60 },
+  armor_divine:      { name: '신성 갑옷',       cat: 'equipment',  base: 490,  supply: 10,  demand: 45 },
   // ── 희귀·유물·금제 ────────────────────────
   magic_crystal:     { name: '마법 결정',       cat: 'rare',       base: 200,  supply: 30,  demand: 60 },
   ancient_artifact:  { name: '고대 유물',       cat: 'artifact',   base: 500,  supply: 10,  demand: 40 },

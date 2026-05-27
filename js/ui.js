@@ -74,6 +74,8 @@ function openChoiceModal() {
     btnContainer.className = 'quest-card-grid';
     (choice.options || []).forEach((opt) => {
       const gradeColor = { S: '#ff6d00', A: '#ab47bc', B: '#1976d2', C: '#388e3c', D: '#5a5a5a' };
+      const gradeSuccessLabel = { S: '성공률 낮음 ★★★★★', A: '성공률 보통 ★★★★☆', B: '성공률 양호 ★★★☆☆', C: '성공률 높음 ★★☆☆☆', D: '성공률 최고 ★☆☆☆☆' };
+      const gradePenaltyLabel = { S: '실패 패널티: 치명적', A: '실패 패널티: 심각', B: '실패 패널티: 보통', C: '실패 패널티: 경미', D: '실패 패널티: 없음' };
       const grade = opt.grade || 'C';
       const card = document.createElement('div');
       card.className = 'quest-card';
@@ -83,6 +85,10 @@ function openChoiceModal() {
           <span class="quest-card-title">${opt.label}</span>
         </div>
         <div class="quest-card-body">${opt.desc || ''}</div>
+        <div class="quest-card-risk">
+          <span class="quest-risk-label">${gradeSuccessLabel[grade] || ''}</span>
+          <span class="quest-penalty-label">${gradePenaltyLabel[grade] || ''}</span>
+        </div>
         <div class="quest-card-footer">
           <button class="btn-quest-accept">✅ 수락</button>
           <button class="btn-quest-reject">❌ 거절</button>
@@ -126,7 +132,7 @@ function resolveChoice(choice, opt, gs) {
   // opt는 { label, desc, reward, _questId? } 객체 또는 하위 호환성을 위한 문자열
   const reward = (typeof opt === 'object' && opt !== null) ? opt.reward : opt;
   if (choice.type === 'party_quest') {
-    resolvePartyQuest(choice.partyId, reward, gs);
+    resolvePartyQuest(choice.partyId, reward, gs, (typeof opt === 'object' ? opt.grade : null) || 'C');
   } else if (choice.type === 'guild_quest') {
     resolveGuildQuest(reward, gs, opt._questId);
   } else if (choice.type === 'guild_announce') {
@@ -161,15 +167,18 @@ function colorizeLog(text, gs) {
   // 3. 골드 단독 수량 (NNG) — 아직 마커 처리 안 된 것만
   text = text.replace(/(\d[\d,]+)G(?!\d|\x04)/g, (_, n) => `${T}log-gold${M}${n}G${E}`);
 
-  // 4. 캐릭터 이름 → 청록색 (마커 밖 텍스트에서만 치환)
+  // 4. 캐릭터 이름 → 성별 색상 (남=파랑, 여=핑크, 기타=보라)
   if (gs?.characters?.length) {
-    const names = gs.characters
-      .map(c => c.name).filter(n => n?.length >= 2)
-      .sort((a, b) => b.length - a.length);
-    for (const name of names) {
-      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const chars = gs.characters
+      .filter(c => c.name?.length >= 2)
+      .sort((a, b) => b.name.length - a.name.length);
+    for (const char of chars) {
+      const esc = char.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const re = new RegExp(`(?<![\\x02-\\x04])${esc}`, 'g');
-      text = text.replace(re, `${T}log-name${M}${name}${E}`);
+      const gCls = char.gender === 'male' ? 'log-name-male'
+        : char.gender === 'female' ? 'log-name-female'
+        : 'log-name-other';
+      text = text.replace(re, `${T}${gCls}${M}${char.name}${E}`);
     }
   }
 
@@ -467,17 +476,16 @@ function renderMarketPanel(gs) {
     if (!grouped[cat] || !grouped[cat].length) continue;
     html += `<div class="market-section-title">${label}</div>`;
     for (const item of grouped[cat]) {
-      const priceDiff = item.currentPrice - item.prevPrice;
-      // 가격 변동 등급: 폭등/폭락/상승/하락/변동없음
+      const priceDiff = item.currentPrice - (item.prevPrice || item.currentPrice);
+      // 가격 변동: 화살표 + 수치만 표시 (텍스트 레이블 없음)
       let changeLabel, changeClass;
       const absDiff = Math.abs(priceDiff);
-      const diffRatio = item.basePrice > 0 ? absDiff / item.basePrice : 0;
       if (priceDiff > 0) {
         changeClass = 'up';
-        changeLabel = diffRatio >= 0.15 ? `📈폭등 +${priceDiff}` : `▲상승 +${priceDiff}`;
+        changeLabel = `▲+${priceDiff}`;
       } else if (priceDiff < 0) {
         changeClass = 'down';
-        changeLabel = diffRatio >= 0.15 ? `📉폭락 -${absDiff}` : `▼하락 -${absDiff}`;
+        changeLabel = `▼-${absDiff}`;
       } else {
         changeClass = 'neutral';
         changeLabel = '—';
@@ -574,21 +582,40 @@ function buildInventorySection(char, gs) {
       }).join('')
     : '<span class="text-muted" style="font-size:12px">인벤토리 비어 있음</span>';
 
-  // 전투 스킬 (침공 시 실제 사용 스킬)
+  // ── 스킬 UI: 일반 스킬 3개 + 침공 스킬 1개 — 모두 동일한 팝업 스타일 ──
   const raidSk = typeof RAID_SKILL_TABLE !== 'undefined' && char.class ? RAID_SKILL_TABLE[char.class] : null;
+
+  // 스킬 팝업 칩 렌더러 (isRaid: 침공 스킬 여부)
+  function _skillChip(name, mpCost, effect, skillKey, isRaid) {
+    const lvl = isRaid ? null : ((char.skillLevels || {})[skillKey] || 1);
+    const stars = lvl ? '★'.repeat(lvl) + '☆'.repeat(5 - lvl) : '';
+    const typeLabel = isRaid ? '⚔ 침공' : '📖 일반';
+    const chipBg = isRaid
+      ? 'rgba(255,23,68,0.10)' : 'rgba(100,180,255,0.08)';
+    const chipBorder = isRaid ? '#ff1744' : '#546e7a';
+    const chipColor  = isRaid ? '#ff8a80' : '#b0bec5';
+    return `<div class="skill-popup-chip" style="background:${chipBg};border-color:${chipBorder};color:${chipColor}">
+      <div class="skill-popup-header">
+        <span class="skill-popup-type">${typeLabel}</span>
+        <strong class="skill-popup-name">${name}</strong>
+        <span class="skill-popup-mp">MP -${mpCost}</span>
+      </div>
+      <div class="skill-popup-effect">${effect}</div>
+      ${stars ? `<div class="skill-popup-stars">${stars} Lv.${lvl}</div>` : ''}
+    </div>`;
+  }
+
   const raidSkHtml = raidSk
-    ? `<div class="skill-level-chip raid-skill-chip" title="${raidSk.effect}" style="width:100%;max-width:none;background:rgba(255,23,68,0.10);border-color:#ff1744;color:#ff8a80">
-         ⚔ 침공 스킬: <strong>${raidSk.name}</strong>  MP -${raidSk.mpCost}
-         <br><span style="font-size:10px;opacity:0.85">${raidSk.effect}</span>
-       </div>`
+    ? _skillChip(raidSk.name, raidSk.mpCost, raidSk.effect, null, true)
     : '';
 
-  // 일반 스킬 + 레벨 표시
-  const skillsHtml = char.classSkills.length
-    ? char.classSkills.map(s => {
-        const lvl = (char.skillLevels || {})[s] || 1;
-        const stars = '★'.repeat(lvl) + '☆'.repeat(5 - lvl);
-        return `<div class="skill-level-chip" title="${s} Lv.${lvl} — 레벨 ${lvl}/5"><span class="skill-chip-name">${s}</span><span class="skill-chip-stars">${stars}</span></div>`;
+  const skillsHtml = char.classSkills && char.classSkills.length
+    ? char.classSkills.map(sk => {
+        // classSkills는 이제 {name, mpCost, effect} 객체 배열
+        const skName   = (typeof sk === 'object') ? sk.name   : sk;
+        const skMp     = (typeof sk === 'object') ? sk.mpCost : 0;
+        const skEffect = (typeof sk === 'object') ? sk.effect : '—';
+        return _skillChip(skName, skMp, skEffect, skName, false);
       }).join('')
     : '<span class="text-muted" style="font-size:12px">스킬 없음</span>';
 
@@ -628,8 +655,7 @@ function buildInventorySection(char, gs) {
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${inventoryHtml}</div>
       ${statAllocHtml}
       <div style="margin:4px 0;font-size:11px;color:var(--text-muted)">스킬</div>
-      ${raidSkHtml}
-      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">${skillsHtml}</div>
+      <div class="skill-popup-grid">${skillsHtml}${raidSkHtml}</div>
       <div style="margin-top:8px;font-size:11px;color:var(--text-muted)">행동 기록</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">
         전투:${char.actionCounts.combat||0} · 마법:${char.actionCounts.magic||0} · 신성:${char.actionCounts.faith||0} · 잠입:${char.actionCounts.stealth||0} · 사교:${char.actionCounts.social||0} · 생존:${char.actionCounts.survival||0} · 교역:${char.actionCounts.trade||0}
@@ -903,17 +929,21 @@ function renderBasePanel(gs) {
 
     if (lockedBuildings.length > 0) {
       const STAGE_NAMES = ['야영지', '마을', '성채', '왕도'];
-      html += `<div class="market-section-title" style="color:var(--text-muted)">🔒 해금 필요 시설</div>`;
+      html += `<div class="market-section-title" style="color:var(--text-muted)">🔒 잠긴 시설 (해금 조건 미달)</div>`;
       for (const [bId, bDef] of lockedBuildings) {
-        const reqStage = STAGE_NAMES[(bDef.minBaseLevel || 1) - 1] || `Lv.${bDef.minBaseLevel}`;
+        const reqLvl   = bDef.minBaseLevel || 1;
+        const reqStage = STAGE_NAMES[reqLvl - 1] || `Lv.${reqLvl}`;
+        const curLvl   = gs.world.baseLevel;
+        const gapLvl   = reqLvl - curLvl;
         html += `
-          <div class="building-card" style="opacity:0.45;pointer-events:none">
+          <div class="building-card building-locked">
             <div class="building-card-header">
-              <span class="building-icon">${bDef.icon}</span>
-              <span class="building-name">${bDef.name}</span>
-              <span class="btn-small disabled-btn" style="font-size:11px">🔒 ${reqStage}</span>
+              <span class="building-icon" style="opacity:0.5">${bDef.icon}</span>
+              <span class="building-name" style="opacity:0.6">${bDef.name}</span>
+              <span class="lock-badge">🔒 거점 Lv.${reqLvl} (${reqStage}) 필요</span>
             </div>
-            <div class="building-desc">${bDef.desc}</div>
+            <div class="building-desc" style="opacity:0.5">${bDef.desc}</div>
+            <div class="lock-hint">현재 거점 Lv.${curLvl} → 거점 ${gapLvl}단계 업그레이드 필요</div>
           </div>`;
       }
     }

@@ -70,12 +70,13 @@ function updateDemandFromWorld(gs) {
 
   // High threat → more weapon/armor demand
   if (threat > 40) {
-    gs.market['weapon_basic'].demandIndex += 2;
-    gs.market['armor_basic'].demandIndex += 2;
+    if (gs.market['weapon_sword']) gs.market['weapon_sword'].demandIndex += 2;
+    if (gs.market['armor_chain'])  gs.market['armor_chain'].demandIndex += 2;
   }
   if (threat > 60) {
     gs.market['healing_potion'].demandIndex += 3;
-    gs.market['weapon_basic'].demandIndex += 3;
+    if (gs.market['weapon_sword']) gs.market['weapon_sword'].demandIndex += 3;
+    if (gs.market['weapon_dark'])  gs.market['weapon_dark'].demandIndex += 2;
   }
 
   // Many characters injured → potion demand rises
@@ -106,39 +107,64 @@ function checkInflation(gs) {
   const avgGold = gs.characters.length > 0 ? totalGold / gs.characters.length : 0;
 
   if (avgGold > 2000) {
-    // inflation: nudge all prices up
+    // inflation: nudge demand up — price change is reflected in next recalc (no log text)
     for (const item of Object.values(gs.market)) {
-      item.demandIndex = Math.min(300, item.demandIndex * 1.02);
+      if (['food','consumable','material','loot'].includes(item.cat)) {
+        item.demandIndex = Math.min(300, item.demandIndex * 1.02);
+      }
     }
-    return '📈 [시장] 골드 과다 유통으로 물가가 상승했다.';
+    // No log text for inflation — reflected silently in prices
   }
   return null;
 }
 
+// ── 시장 대화 풀 ─────────────────────────
+const MKT_DLG_SHORTAGE = [
+  (name, item) => `${name}: "${item} 재고가 다 떨어졌어... 어디서 구해야 하지?"`,
+  (name, item) => `${name}: "시장에 ${item}이 없다고? 이건 큰일인데."`,
+  (name, item) => `${name}: "${item}을 못 구하면 원정 계획이 틀어져."`,
+  (name, item) => `${name}: "상인한테 물어봤는데 ${item} 재고가 없대. 어쩌지."`,
+];
+const MKT_DLG_COLLAPSE = [
+  (name) => `${name}: "시장이 이렇게 된 건 처음이야. 빨리 손을 써야 해."`,
+  (name) => `${name}: "물건이 없어서 직접 교환하는 지경까지 왔어. 큰일이야."`,
+  (name) => `${name}: "이 상황이 계속되면 길드 운영도 힘들어질 텐데."`,
+];
+const MKT_DLG_DUMPING = [
+  (name, item) => `${name}: "요새 ${item}이 너무 많이 풀렸나봐. 가격이 영..."`,
+  (name, item) => `${name}: "${item}은 지금 팔아봤자 별로야. 좀 더 기다려야 하나."`,
+];
+const MKT_DLG_BLACKMARKET = [
+  (name) => `${name}: "요즘 뒷골목에서 이상한 거래가 많다더라."`,
+  (name) => `${name}: "암시장이 활발해지면 좋을 게 없는데..."`,
+];
+
 // ── Market anomaly detection ──────────────
 function checkMarketAnomalies(gs) {
   const anomalies = [];
+  const aliveChars = (gs.characters || []).filter(c => !c.isDead);
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const randChar = aliveChars.length ? aliveChars[Math.floor(Math.random() * aliveChars.length)].name : '모험가';
 
-  // Shortage: any item supply < 10
+  // Shortage: consumable/food/material/loot items only (장비는 수요공급 미적용)
+  const SUPPLY_CATS = new Set(['food','consumable','material','loot']);
   for (const [id, item] of Object.entries(gs.market)) {
-    // Only flag non-rare items that have dropped significantly
-    if (item.supplyIndex < 10 && !['rare','artifact','forbidden'].includes(item.cat)) {
-      anomalies.push({ type: 'shortage', text: `⚠ [품귀] ${item.name}의 재고가 바닥났다! 가격이 폭등했다.` });
+    if (item.supplyIndex < 10 && SUPPLY_CATS.has(item.cat)) {
+      const dlg = pick(MKT_DLG_SHORTAGE)(randChar, item.name);
+      anomalies.push({ type: 'shortage', text: `🛒 ${dlg}` });
     }
   }
 
-  // Inflation check
-  const inflationMsg = checkInflation(gs);
-  if (inflationMsg) {
-    anomalies.push({ type: 'inflation', text: inflationMsg });
-  }
+  // Inflation check (silent — no anomaly log)
+  checkInflation(gs);
 
   // Economic collapse
   if (gs.settings.economicCollapseEvent) {
-    const lowCount = Object.values(gs.market).filter(i => i.supplyIndex < 10).length;
+    const lowCount = Object.values(gs.market).filter(i => i.supplyIndex < 10 && SUPPLY_CATS.has(i.cat)).length;
     const totalGold = gs.characters.reduce((s, c) => s + c.gold, 0);
     if (lowCount >= 4 || totalGold < 20) {
-      anomalies.push({ type: 'collapse', text: '💥 [경제 붕괴] 시장이 무너지고 있다! 물물교환이 시작됐다.' });
+      const dlg = pick(MKT_DLG_COLLAPSE)(randChar);
+      anomalies.push({ type: 'collapse', text: `💬 ${dlg}` });
     }
   }
 
@@ -146,14 +172,16 @@ function checkMarketAnomalies(gs) {
   if (gs.settings.blackMarket && gs.world.threatLevel > 60) {
     const hasRogueOrNecro = gs.characters.some(c => c.class === 'rogue' || c.class === 'necromancer');
     if (hasRogueOrNecro) {
-      gs.market['forbidden_material'].demandIndex += 5;
-      anomalies.push({ type: 'blackmarket', text: '🕵 [암시장] 어둠이 짙어지면서 암시장 활동이 활발해졌다.' });
+      if (gs.market['forbidden_material']) gs.market['forbidden_material'].demandIndex += 5;
+      const dlg = pick(MKT_DLG_BLACKMARKET)(randChar);
+      anomalies.push({ type: 'blackmarket', text: `🕵 ${dlg}` });
     }
   }
 
-  // Dumping: merchant selling too much
-  if (gs.market['monster_material'].supplyIndex > 250) {
-    anomalies.push({ type: 'dumping', text: '📉 [덤핑] 몬스터 소재 과잉 공급으로 시세가 폭락했다.' });
+  // Dumping: monster material oversupply
+  if (gs.market['monster_material'] && gs.market['monster_material'].supplyIndex > 250) {
+    const dlg = pick(MKT_DLG_DUMPING)(randChar, gs.market['monster_material'].name);
+    anomalies.push({ type: 'dumping', text: `💬 ${dlg}` });
   }
 
   return anomalies;

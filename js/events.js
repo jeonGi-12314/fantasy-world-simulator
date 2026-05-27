@@ -941,8 +941,8 @@ const EVENT_POOL = [
         text: `[세계 이벤트] ${pick(events)} 세계 위협도가 상승했다.`,
         effects: fx({ sanity: -5 }),
         worldThreatDelta: randInt(3, 8),
-        supply: { weapon_basic: -5, armor_basic: -5 },
-        demand: { weapon_basic: 15, armor_basic: 15 },
+        supply: { weapon_sword: -5, armor_chain: -5 },
+        demand: { weapon_sword: 15, armor_chain: 15 },
         addAction: {},
       };
     },
