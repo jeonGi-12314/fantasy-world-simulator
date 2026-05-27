@@ -131,6 +131,9 @@ async function nextDay() {
     // 9e. Skill level growth check (once per day, after all action counts updated)
     processSkillLevels(aliveChars, gs, dayLogs);
 
+    // 9e-2. Rare/artifact equipment passive effects
+    processRareItemPassives(aliveChars, gs, dayLogs);
+
     // 9f. Auto-recruitment (random adventurer joins guild)
     processRecruitment(gs, dayLogs);
 
@@ -923,6 +926,71 @@ function getDayDate(day) {
     isSeasonEnd: dayInSeason === seasonLen,
     label: `${year}년 ${SEASON_EMOJI[seasonIdx]}${SEASON_NAMES[seasonIdx]} ${dayInSeason}일`,
   };
+}
+
+// ─── 희귀·유물 장비 패시브 효과 테이블 ─────────────────────────
+// trigger: 하루당 발동 확률. effect(c, gs, dayLogs) → string (로그 텍스트)
+const RARE_ITEM_PASSIVES = {
+  blade_ignis:  {
+    trigger: 0.22,
+    effect: (c, gs) => { const g = randInt(5, 12); c.gold += g; return `🔥 ${c.name}의 [이그니스]가 빛났다. 소각된 잔해에서 ${g}G를 찾았다.`; },
+  },
+  frost_arbor:  {
+    trigger: 0.18,
+    effect: (c, gs) => { gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 1); return `❄ ${c.name}의 [프로스트]가 적군을 얼렸다. (위협도 -1)`; },
+  },
+  shadow_fang:  {
+    trigger: 0.25,
+    effect: (c, gs) => { const g = randInt(8, 18); c.gold += g; return `🌑 ${c.name}이(가) [섀도팽]의 힘으로 암거래 정보를 팔았다. (+${g}G)`; },
+  },
+  storm_bow:    {
+    trigger: 0.20,
+    effect: (c, gs) => { if (gs.market?.travel_food) gs.market.travel_food.supplyIndex = Math.min(300, gs.market.travel_food.supplyIndex + 5); return `🌪 ${c.name}의 [스톰레인]이 바람을 타고 보급로를 개척했다. (식량 공급 +5)`; },
+  },
+  divine_plate: {
+    trigger: 0.20,
+    effect: (c, gs) => {
+      const party = gs.parties?.find(p => p.memberIds?.includes(c.id));
+      const targets = party ? gs.characters.filter(x => party.memberIds.includes(x.id) && !x.isDead) : [c];
+      targets.forEach(t => { t.hp = Math.min(t.maxHp, t.hp + 8); });
+      return `✨ ${c.name}의 [세라피엘]에서 신성한 빛이 흘렀다. 파티원 HP +8.`;
+    },
+  },
+  shadow_robe:  {
+    trigger: 0.18,
+    effect: (c, gs) => { c.sanity = Math.min(100, c.sanity + 5); return `🌑 ${c.name}의 [나이트쉐이드]가 정신을 보호했다. (이성 +5)`; },
+  },
+  crown_of_dawn:{
+    trigger: 0.15,
+    effect: (c, gs) => {
+      gs.characters.filter(x => !x.isDead).forEach(x => { x.sanity = Math.min(100, x.sanity + 3); x.fatigue = Math.max(0, x.fatigue - 3); });
+      return `👑 ${c.name}의 [다운크라운]이 여명을 불렀다. 길드원 전체 이성 +3, 피로 -3.`;
+    },
+  },
+  ring_void:    {
+    trigger: 0.18,
+    effect: (c, gs) => { c.mp = Math.min(c.maxMp, c.mp + 10); return `💍 [보이드링]에서 마력이 솟았다. ${c.name} MP +10.`; },
+  },
+  cape_tempest: {
+    trigger: 0.22,
+    effect: (c, gs) => { c.fatigue = Math.max(0, c.fatigue - 10); return `🧣 [템페스트]의 바람이 ${c.name}의 피로를 씻어냈다. (피로 -10)`; },
+  },
+};
+
+// 희귀 장비 패시브 처리 — 매일 호출
+function processRareItemPassives(aliveChars, gs, dayLogs) {
+  for (const char of aliveChars) {
+    if (!char.equipment) continue;
+    for (const slot of Object.values(char.equipment)) {
+      if (!slot?.id) continue;
+      const passive = RARE_ITEM_PASSIVES[slot.id];
+      if (!passive) continue;
+      if (Math.random() < passive.trigger) {
+        const text = passive.effect(char, gs);
+        if (text) dayLogs.push({ logClass: 'log-special', text });
+      }
+    }
+  }
 }
 
 // ─── 전투 스킬 테이블 (전역) — 계절 침공 및 인벤토리 참조 ───
