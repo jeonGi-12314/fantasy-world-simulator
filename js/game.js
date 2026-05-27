@@ -1049,6 +1049,49 @@ function processRareItemPassives(aliveChars, gs, dayLogs) {
         if (text) dayLogs.push({ logClass: 'log-special', text });
       }
     }
+    // ── 인벤토리 희귀/유물/금지 소지 효과 ──
+    processInventoryItemPassives(char, gs, dayLogs);
+  }
+}
+
+// 인벤토리 아이템 카테고리별 소지 효과 (5일마다 발동)
+function processInventoryItemPassives(char, gs, dayLogs) {
+  if (!char.inventory?.length) return;
+  if (gs.day % 5 !== (char.id ? char.id.charCodeAt(0) % 5 : 0)) return; // 5일 주기 분산
+
+  const inv = char.inventory;
+  const hasRare     = inv.some(it => (gs.market[it.id]?.cat || it.cat) === 'rare');
+  const hasArtifact = inv.some(it => (gs.market[it.id]?.cat || it.cat) === 'artifact');
+  const hasForbid   = inv.some(it => (gs.market[it.id]?.cat || it.cat) === 'forbidden');
+
+  if (hasRare) {
+    // 희귀품 소지: 마법 공명 — mpActive 캐릭터 MP+5, 그 외 이성+1
+    if (CLASSES[char.class]?.mpActive) {
+      char.mp = Math.min(char.maxMp, (char.mp || 0) + 5);
+      dayLogs.push({ logClass: 'log-special', text: `💎 ${char.name}이 소지한 희귀 결정이 마력과 공명했다. (MP +5)` });
+    } else {
+      char.sanity = Math.min(100, char.sanity + 1);
+    }
+  }
+
+  if (hasArtifact) {
+    // 유물 소지: 고대의 지혜 — EXP +3, 이성 +1
+    char.exp = (char.exp || 0) + 3;
+    char.sanity = Math.min(100, char.sanity + 1);
+    dayLogs.push({ logClass: 'log-special', text: `🏺 ${char.name}이 보유한 유물에서 고대의 지혜가 흘러나왔다. (EXP +3, 이성 +1)` });
+  }
+
+  if (hasForbid) {
+    // 금지 재료 소지: 이성 서서히 잠식 또는 어둠의 힘 발현
+    if (Math.random() < 0.6) {
+      char.sanity = Math.max(0, char.sanity - 2);
+      dayLogs.push({ logClass: 'log-system', text: `💀 ${char.name}이(가) 봉인된 재료의 어두운 기운에 잠식되고 있다. (이성 -2)` });
+    } else {
+      // 어둠의 힘으로 잠깐 강화
+      char.stats.str = Math.min(10, (char.stats.str || 0) + 1);
+      // 임시: 이후 회복 (다음 날 원상복귀 X — 간단히 로그만)
+      dayLogs.push({ logClass: 'log-system', text: `🌑 ${char.name}이(가) 금지된 힘에 잠시 눈을 떴다. (STR 일시 고취)` });
+    }
   }
 }
 
@@ -1960,10 +2003,30 @@ function resolvePartyQuest(partyId, rewardType, gs, grade = 'C') {
         for (const c of members) {
           if (Math.random() < cfg.lootChance) {
             c.inventory = c.inventory || [];
-            const isRare = grade === 'S' && Math.random() < 0.3;
-            c.inventory.push(isRare
-              ? { id: 'magic_stone', name: '마석', icon: '💎', cat: 'loot', qty: 1 }
-              : { id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot', qty: 1 });
+            const r = Math.random();
+            let lootItem;
+            if (grade === 'S') {
+              lootItem = r < 0.35
+                ? { id: 'magic_crystal',    name: '마법 결정',    icon: '🔮', cat: 'rare',     qty: 1 }
+                : r < 0.75
+                  ? { id: 'magic_stone',    name: '마석',         icon: '💎', cat: 'material', qty: 1 }
+                  : { id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot',    qty: 1 };
+            } else if (grade === 'A') {
+              lootItem = r < 0.55
+                ? { id: 'magic_stone',      name: '마석',         icon: '💎', cat: 'material', qty: 1 }
+                : { id: 'monster_material', name: '몬스터 소재',  icon: '🦴', cat: 'loot',     qty: 1 };
+            } else if (grade === 'B') {
+              lootItem = r < 0.25
+                ? { id: 'magic_stone',      name: '마석',         icon: '💎', cat: 'material', qty: 1 }
+                : r < 0.65
+                  ? { id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot',   qty: 1 }
+                  : { id: 'herb',           name: '약초',         icon: '🌿', cat: 'material', qty: 1 };
+            } else {
+              lootItem = r < 0.55
+                ? { id: 'monster_material', name: '몬스터 소재',  icon: '🦴', cat: 'loot',     qty: 1 }
+                : { id: 'herb',             name: '약초',         icon: '🌿', cat: 'material', qty: 1 };
+            }
+            c.inventory.push(lootItem);
           }
         }
         if (members.length >= 2) { const g = pick(DLG_COMBAT_WIN); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
@@ -1985,16 +2048,41 @@ function resolvePartyQuest(partyId, rewardType, gs, grade = 'C') {
         const gold = Math.round(randInt(60, 150) * members.length * cfg.goldMul);
         const expGain = Math.round(15 * cfg.expMul);
         members.forEach(c => { c.gold += Math.floor(gold / members.length); c.exp = (c.exp || 0) + expGain; });
-        if (grade === 'S' || grade === 'A')
+        if (grade === 'S') {
+          // S등급: 고대 유물을 대표 멤버 인벤토리에 직접 지급
+          const bearer = members[0];
+          bearer.inventory = bearer.inventory || [];
+          bearer.inventory.push({ id: 'ancient_artifact', name: '고대 유물', icon: '🏺', cat: 'artifact', qty: 1 });
           gs.world.baseResources.ancient_artifact = (gs.world.baseResources.ancient_artifact || 0) + 1;
+        } else if (grade === 'A') {
+          gs.world.baseResources.ancient_artifact = (gs.world.baseResources.ancient_artifact || 0) + 1;
+        }
         logs.push({ logClass: 'log-party', text: `🗺 ${gradeTag} 파티가 탐험에 성공! 금화 ${gold}G와 귀한 발견물을 가져왔다.` });
         for (const c of members) {
           if (Math.random() < cfg.lootChance) {
             c.inventory = c.inventory || [];
-            const isStone = Math.random() < (grade === 'S' ? 0.7 : 0.4);
-            c.inventory.push(isStone
-              ? { id: 'magic_stone', name: '마석', icon: '💎', cat: 'loot', qty: 1 }
-              : { id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot', qty: 1 });
+            const r = Math.random();
+            let lootItem;
+            if (grade === 'S') {
+              lootItem = r < 0.50
+                ? { id: 'magic_crystal', name: '마법 결정',   icon: '🔮', cat: 'rare',     qty: 1 }
+                : r < 0.80
+                  ? { id: 'magic_stone', name: '마석',        icon: '💎', cat: 'material', qty: 1 }
+                  : { id: 'herb',        name: '약초',        icon: '🌿', cat: 'material', qty: 1 };
+            } else if (grade === 'A') {
+              lootItem = r < 0.45
+                ? { id: 'magic_stone',   name: '마석',        icon: '💎', cat: 'material', qty: 1 }
+                : r < 0.70
+                  ? { id: 'magic_crystal', name: '마법 결정', icon: '🔮', cat: 'rare',     qty: 1 }
+                  : { id: 'herb',          name: '약초',      icon: '🌿', cat: 'material', qty: 1 };
+            } else if (grade === 'B') {
+              lootItem = r < 0.50
+                ? { id: 'magic_stone',   name: '마석',        icon: '💎', cat: 'material', qty: 1 }
+                : { id: 'herb',          name: '약초',        icon: '🌿', cat: 'material', qty: 1 };
+            } else {
+              lootItem = { id: 'herb',   name: '약초',        icon: '🌿', cat: 'material', qty: 1 };
+            }
+            c.inventory.push(lootItem);
           }
         }
         if (members.length >= 2) { const g = pick(DLG_EXPLORE_WIN); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
