@@ -520,6 +520,7 @@ function processSkillLevels(aliveChars, gs, dayLogs) {
     if (!classAction) continue;
     const actionCount = char.actionCounts[classAction] || 0;
 
+    // 하루에 최대 1개 스킬만 레벨업 (가장 먼저 조건 충족된 스킬)
     for (const skill of char.classSkills) {
       const currentLevel = char.skillLevels[skill] || 1;
       if (currentLevel >= 5) continue;
@@ -527,6 +528,7 @@ function processSkillLevels(aliveChars, gs, dayLogs) {
       if (actionCount >= threshold) {
         char.skillLevels[skill] = currentLevel + 1;
         dayLogs.push({ logClass: 'log-special', text: `✨ ${char.name}의 스킬 [${skill}]이(가) Lv.${currentLevel + 1}로 성장했다!` });
+        break; // 하루 1스킬 성장 제한
       }
     }
   }
@@ -1745,6 +1747,33 @@ function resolvePartyQuest(partyId, rewardType, gs) {
   if (!members.length) return;
 
   const logs = [];
+
+  // ── 출발 시 식량 소비 ──
+  // 전투·탐사 의뢰는 식량이 필요. 인벤토리에서 식량 소비 (없으면 골드로 대체)
+  const FOOD_IDS = new Set(['travel_food','dried_meat','bread','potato','salt_fish']);
+  if (rewardType === 'combat' || rewardType === 'explore') {
+    for (const c of members) {
+      const foodIdx = (c.inventory || []).findIndex(it => FOOD_IDS.has(it.id));
+      if (foodIdx >= 0) {
+        const food = c.inventory[foodIdx];
+        food.qty = (food.qty || 1) - 1;
+        if (food.qty <= 0) c.inventory.splice(foodIdx, 1);
+        logs.push({ logClass: 'log-system', text: `🍞 ${c.name}이(가) 출발 전 ${food.name}을(를) 챙겼다.` });
+      } else {
+        // 식량 없음 — 골드로 구매하거나 피로 증가
+        const travelCost = gs.market?.travel_food?.currentPrice || 10;
+        if (c.gold >= travelCost) {
+          c.gold -= travelCost;
+          gs.market.travel_food && (gs.market.travel_food.supplyIndex = Math.max(1, gs.market.travel_food.supplyIndex - 1));
+          logs.push({ logClass: 'log-system', text: `🍞 ${c.name}이(가) 시장에서 여행 식량을 ${travelCost}G에 구매해 출발했다.` });
+        } else {
+          c.fatigue = Math.min(100, c.fatigue + 8);
+          logs.push({ logClass: 'log-system', text: `😓 ${c.name}은(는) 식량도 없이 출발했다. (피로 +8)` });
+        }
+      }
+    }
+  }
+
   const avgStr = members.reduce((s, c) => s + (c.stats.str || 0), 0) / members.length;
   const success = Math.random() < (0.4 + avgStr * 0.04);
 
@@ -1758,6 +1787,13 @@ function resolvePartyQuest(partyId, rewardType, gs) {
         gs.world.townGold = (gs.world.townGold || 0) + guildCut;
         gs.world.threatLevel = Math.max(0, gs.world.threatLevel - 3);
         logs.push({ logClass: 'log-party', text: `⚔ 파티 [${names}]이(가) 토벌 의뢰에 성공했다! 금화 ${gold-guildCut}G 분배, 길드 창고 +${guildCut}G. (위협도 -3)` });
+        // 귀환 전리품: 멤버별 몬스터 소재 인벤토리 추가
+        for (const c of members) {
+          if (Math.random() < 0.60) {
+            c.inventory = c.inventory || [];
+            c.inventory.push({ id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot', qty: 1 });
+          }
+        }
         if (members.length >= 2) { const g = pick(DLG_COMBAT_WIN); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
       } else {
         members.forEach(c => { c.hp = Math.max(1, c.hp - randInt(10, 25)); });
@@ -1772,6 +1808,16 @@ function resolvePartyQuest(partyId, rewardType, gs) {
         members.forEach(c => { c.gold += Math.floor(gold / members.length); c.exp += 10; });
         gs.world.baseResources.ancient_artifact = (gs.world.baseResources.ancient_artifact||0) + 1;
         logs.push({ logClass: 'log-party', text: `🗺 파티가 유적 탐험에 성공! 금화 ${gold}G와 고대 유물을 발견했다.` });
+        // 귀환 전리품: 마법석 or 몬스터 소재
+        for (const c of members) {
+          if (Math.random() < 0.50) {
+            c.inventory = c.inventory || [];
+            const isStone = Math.random() < 0.4;
+            c.inventory.push(isStone
+              ? { id: 'magic_stone', name: '마석', icon: '💎', cat: 'loot', qty: 1 }
+              : { id: 'monster_material', name: '몬스터 소재', icon: '🦴', cat: 'loot', qty: 1 });
+          }
+        }
         if (members.length >= 2) { const g = pick(DLG_EXPLORE_WIN); logs.push(dlgPair(members[0].name, g[0], members[1].name, g[1])); }
       } else {
         members.forEach(c => { c.hp = Math.max(1, c.hp - randInt(5, 15)); c.fatigue = Math.min(100, c.fatigue + 20); });
@@ -2414,6 +2460,23 @@ function processInventoryManagement(aliveChars, gs, dayLogs) {
   for (const char of aliveChars) {
     if (!char.inventory || !char.inventory.length) continue;
 
+    // ── ⓪ 전리품 판매: 'loot' 카테고리 아이템은 귀환 후 시장에 판매 ──
+    let soldLoot = false;
+    for (let i = char.inventory.length - 1; i >= 0; i--) {
+      const it = char.inventory[i];
+      if (it.cat !== 'loot') continue;
+      const mkt = gs.market?.[it.id];
+      const sellPrice = mkt ? Math.floor(mkt.currentPrice * 0.6) : 20;
+      char.gold += sellPrice;
+      gs.world.townGold = (gs.world.townGold || 0) + sellPrice;
+      if (mkt) mkt.supplyIndex = Math.min(300, mkt.supplyIndex + 2);
+      char.inventory.splice(i, 1);
+      dayLogs.push({ logClass: 'log-economy', text:
+        `🦴 ${char.name}이(가) 전리품 ${it.icon||''}${it.name}을(를) 시장에 ${sellPrice}G에 팔았다.` });
+      soldLoot = true;
+    }
+    if (soldLoot) continue;
+
     // ── ① 강화: 동일 슬롯·등급 장비 2개 보유 시 대장간에서 합성 ──
     // 30% 기회 (대장간이 있으면 50%)
     const hasForge = !!gs.world.buildings?.forge;
@@ -2556,11 +2619,23 @@ function processEquipmentPurchases(aliveChars, gs, dayLogs) {
         merchant:    ['acc_bracer', 'weapon_sword', 'weapon_dark'],
       };
       const prefs = CLASS_WEAPON_PREF[char.class] || [];
+
+      // 장비 다양성: 다른 캐릭터가 이미 착용한 아이템은 후순위
+      const othersEquipped = new Set(
+        aliveChars
+          .filter(c => c.id !== char.id)
+          .flatMap(c => Object.values(c.equipment || {}))
+          .filter(Boolean)
+          .map(e => e.id)
+      );
+
       let [itemId, itemDef] = candidates[0];
-      for (const prefId of prefs) {
-        const found = candidates.find(([id]) => id === prefId);
-        if (found) { [itemId, itemDef] = found; break; }
-      }
+      // 1순위: 클래스 선호 + 타인 미착용
+      const _picked1 = prefs.reduce((acc, pid) => acc || candidates.find(([id]) => id === pid && !othersEquipped.has(id)) || null, null);
+      // 2순위: 클래스 선호 (중복 허용)
+      const _picked2 = prefs.reduce((acc, pid) => acc || candidates.find(([id]) => id === pid) || null, null);
+      if (_picked1) [itemId, itemDef] = _picked1;
+      else if (_picked2) [itemId, itemDef] = _picked2;
 
       const price = itemDef.price;
 
