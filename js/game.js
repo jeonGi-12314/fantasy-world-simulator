@@ -591,18 +591,43 @@ const LUXURY_ITEMS = [
 ];
 function processLuxurySpending(aliveChars, gs, dayLogs) {
   for (const char of aliveChars) {
-    if (char.gold <= 500) continue;
-    const chance = 0.15 + Math.min(0.25, (char.gold - 500) / 4000); // gold 500→4500G = 15→40%
+    const isMerchant = char.class === 'merchant';
+
+    // 일반 캐릭터: 800G 이상 + 낮은 확률 (5~12%, 이전 15~40%에서 하향)
+    // 상인 클래스: 400G 이상 or 채무로 구매 가능 (소비 성향이 높음)
+    const luxThreshold = isMerchant ? 400 : 800;
+    const baseChance   = isMerchant ? 0.08 : 0.04;
+    const extraChance  = isMerchant
+      ? Math.min(0.12, (char.gold - luxThreshold) / 3000)
+      : Math.min(0.08, (char.gold - luxThreshold) / 5000);
+
+    if (char.gold < luxThreshold && !isMerchant) continue;
+    const chance = baseChance + Math.max(0, extraChance);
     if (Math.random() > chance) continue;
 
     const item = pick(LUXURY_ITEMS);
     const cost = randInt(item.cost[0], item.cost[1]);
-    if (char.gold < cost) continue;
 
-    char.gold -= cost;
+    if (char.gold >= cost) {
+      // 자력 구매
+      char.gold -= cost;
+    } else if (isMerchant && !char.debts?.length && cost - char.gold <= 150) {
+      // 상인 클래스: 소액 부족 시 외상(채무) 구매
+      const shortage = cost - char.gold;
+      char.gold = 0;
+      if (!char.debts) char.debts = [];
+      char.debts.push({ creditorId: 'market', amount: shortage, remaining: shortage, dayTaken: gs.day, deadline: gs.day + 5, note: '사치품 외상' });
+      dayLogs.push({ logClass: 'log-economy', text: `📝 ${char.name}이(가) 잔금 ${shortage}G를 외상으로 처리했다.` });
+    } else {
+      continue; // 구매 포기
+    }
+
     char.fatigue = Math.max(0, char.fatigue + (item.fat || 0));
     char.sanity  = Math.min(100, char.sanity  + (item.san || 0));
     if (item.hp) char.hp = char.maxHp;
+
+    // 시장 수요 반영 (사치품 구매 = 소비재 수요 상승)
+    if (gs.market?.quality_meal) gs.market.quality_meal.demandIndex = Math.min(300, gs.market.quality_meal.demandIndex + 2);
 
     dayLogs.push({ logClass: 'log-economy', text: `💸 ${char.name}이(가) [${item.name}]에 ${cost}G를 썼다. ${item.effect}` });
   }
@@ -2647,6 +2672,16 @@ function processInventoryManagement(aliveChars, gs, dayLogs) {
 
       char.gold += price;
       gs.world.townGold = (gs.world.townGold || 0) + price;
+      // 판매 시 해당 카테고리 시장 공급 증가
+      if (tDef) {
+        const sellSlotMkt = tDef.slot === 'weapon' ? 'weapon_basic' : tDef.slot === 'armor' ? 'armor_basic' : null;
+        if (sellSlotMkt && gs.market[sellSlotMkt]) {
+          gs.market[sellSlotMkt].supplyIndex = Math.min(300, gs.market[sellSlotMkt].supplyIndex + 4);
+          gs.market[sellSlotMkt].demandIndex = Math.max(5, gs.market[sellSlotMkt].demandIndex - 2);
+        }
+      } else if (gs.market?.[target.it.id]) {
+        gs.market[target.it.id].supplyIndex = Math.min(300, gs.market[target.it.id].supplyIndex + 3);
+      }
       char.inventory.splice(target.i, 1);
       dayLogs.push({ logClass: 'log-economy', text:
         `🪙 ${char.name}이(가) 짐이 너무 많아 ${target.it.icon||''}${target.it.name}을(를) ${price}G에 시장에 내다 팔았다.` });
@@ -2707,11 +2742,21 @@ function processEquipmentPurchases(aliveChars, gs, dayLogs) {
 
       const price = itemDef.price;
 
+      // 시장 반응 헬퍼: 장비 구매 시 카테고리 공급 감소 + 수요 상승
+      const _applyEquipBuyMarket = () => {
+        const slotMkt = slot === 'weapon' ? 'weapon_basic' : slot === 'armor' ? 'armor_basic' : null;
+        if (slotMkt && gs.market[slotMkt]) {
+          gs.market[slotMkt].supplyIndex = Math.max(1, gs.market[slotMkt].supplyIndex - 5);
+          gs.market[slotMkt].demandIndex = Math.min(300, gs.market[slotMkt].demandIndex + 3);
+        }
+        gs.world.totalGoldCirculated = (gs.world.totalGoldCirculated || 0) + price;
+      };
+
       if (char.gold >= price) {
         // 자력 구매
         char.gold -= price;
         gs.world.townGold = (gs.world.townGold || 0) + Math.floor(price * 0.15);
-        gs.market.weapon_basic && (gs.market.weapon_basic.supplyIndex -= 3);
+        _applyEquipBuyMarket();
         equipItem(char, { id: itemId, ...itemDef }, dayLogs);
         break;
       } else {
@@ -2728,6 +2773,7 @@ function processEquipmentPurchases(aliveChars, gs, dayLogs) {
             char.gold += price;
             char.gold -= price;
             gs.world.townGold = (gs.world.townGold || 0) + Math.floor(price * 0.15);
+            _applyEquipBuyMarket();
             equipItem(char, { id: itemId, ...itemDef }, dayLogs);
 
             if (!char.debts) char.debts = [];
